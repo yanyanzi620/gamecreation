@@ -1,0 +1,40 @@
+# ===============================================================
+# .gitattributes — 换行、文本判定与 Git LFS 规则
+# 顺序说明：后出现的规则覆盖前面的，因此 LFS 规则必须放在 text=auto 之后
+# ===============================================================
+
+# ---------- 1. 默认：自动识别文本，统一 LF ----------
+* text=auto eol=lf
+
+# Windows 脚本类保持 CRLF，避免 cmd/powershell 解析出错
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# ---------- 2. Git LFS：位图 / 源工程 ----------
+*.png       filter=lfs diff=lfs merge=lfs -text
+*.jpg       filter=lfs diff=lfs merge=lfs -text
+*.jpeg      filter=lfs diff=lfs merge=lfs -text
+*.webp      filter=lfs diff=lfs merge=lfs -text
+*.psd       filter=lfs diff=lfs merge=lfs -text
+*.ase       filter=lfs diff=lfs merge=lfs -text
+*.aseprite  filter=lfs diff=lfs merge=lfs -text
+*.gif       filter=lfs diff=lfs merge=lfs -text
+
+# ---------- 3. Git LFS：音频 / 视频 ----------
+*.wav       filter=lfs diff=lfs merge=lfs -text
+*.mp3       filter=lfs diff=lfs merge=lfs -text
+*.ogg       filter=lfs diff=lfs merge=lfs -text
+*.flac      filter=lfs diff=lfs merge=lfs -text
+*.mp4       filter=lfs diff=lfs merge=lfs -text
+
+# ---------- 4. Git LFS：字体 ----------
+*.ttf       filter=lfs diff=lfs merge=lfs -text
+*.otf       filter=lfs diff=lfs merge=lfs -text
+*.woff      filter=lfs diff=lfs merge=lfs -text
+*.woff2     filter=lfs diff=lfs merge=lfs -text
+
+# ---------- 5. Git LFS：模型 / 打包资源（如后续转 3D 或接入 Unity）----------
+*.fbx       filter=lfs diff=lfs merge=lfs -text
+*.blend     filter=lfs diff=lfs merge=lfs -text
+*.pck       filter=lfs diff=lfs merge=lfs -text
