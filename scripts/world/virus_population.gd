@@ -1,6 +1,7 @@
 extends Node2D
 # M1-T2 原型：粒子种群病毒
-#   扩散 = 复制（父粒子配额 + 冷却 + 30 单位粗格封顶）
+#   扩散 = 复制（冷却 + 30 单位粗格封顶；无终身配额）
+#   方向 = 朝最空的邻格生长：前沿外推 + 缺口回填
 #   边界 = 密度前沿（不存 48 半径 / 200 点路径）
 #   消除 = 命中区域内的 live 转 corpse，原地留尸，30 秒衰减
 #
@@ -10,8 +11,8 @@ extends Node2D
 #   · 渲染走单个 MultiMesh，1 次 draw call
 #   · 复制不做邻域查询，只查一格占用计数（O(1)）
 
-const MAX_LIVE := 2200
-const MAX_CORPSE := 900
+const MAX_LIVE := 4200
+const MAX_CORPSE := 1200
 const TOTAL := MAX_LIVE + MAX_CORPSE
 
 const CELL := 30.0
@@ -23,11 +24,12 @@ const R_MIN := 4.5
 const R_MAX := 8.0
 const QUOTA_ROOT := 4
 const QUOTA_CHILD := 2
-const COOL_MIN := 0.55
-const COOL_MAX := 1.15
+const COOL_MIN := 1.00
+const COOL_MAX := 2.00
 const SPAWN_D_MIN := 16.0
 const SPAWN_D_MAX := 30.0
 const SPAWN_ARC := 60.0
+const PROBE_DIST := 30.0
 const YOUNG_SEC := 2.0
 const DRIFT_SPEED := 24.0
 const CORPSE_LIFE := 30.0
@@ -240,7 +242,7 @@ func tick(dt: float) -> void:
 					_py[i] += oy / l * DRIFT_SPEED * dt
 					_write_slot(i)
 			_pcool[i] -= dt
-			if _pquota[i] > 0 and _pcool[i] <= 0.0:
+			if _pcool[i] <= 0.0:
 				_replicate(i)
 		else:
 			_plife[i] -= dt
@@ -257,17 +259,41 @@ func tick(dt: float) -> void:
 func _replicate(i: int) -> void:
 	if _n_live >= MAX_LIVE:
 		return
-	var c := _origins[_pvid[i]]
-	var bx := _px[i] - c.x
-	var by := _py[i] - c.y
-	var base := atan2(by, bx)
-	var ang := base + deg_to_rad(_rng.randf_range(-SPAWN_ARC, SPAWN_ARC))
-	var dist := _rng.randf_range(SPAWN_D_MIN, SPAWN_D_MAX)
-	var nx := _px[i] + cos(ang) * dist
-	var ny := _py[i] + sin(ang) * dist
 
+	# 八邻格探测：朝"最空的邻格"繁殖。
+	# 前沿的邻格是空的 -> 向外推；咬出的缺口邻格也是空的 -> 向内填。
+	var best_dir := Vector2.ZERO
+	var best_cnt := 1 << 20
+	var found := false
+	for k in range(8):
+		var ang := TAU * float(k) / 8.0
+		var dx := cos(ang)
+		var dy := sin(ang)
+		var tx := _px[i] + dx * PROBE_DIST
+		var ty := _py[i] + dy * PROBE_DIST
+		if tx < ARENA_PAD or tx > ARENA_W - ARENA_PAD or ty < ARENA_PAD or ty > ARENA_H - ARENA_PAD:
+			continue
+		var c := _cell_count(tx, ty)
+		if c < best_cnt:
+			best_cnt = c
+			best_dir = Vector2(dx, dy)
+			found = true
+		elif c == best_cnt and _rng.randf() < 0.5:
+			best_dir = Vector2(dx, dy)
+
+	if not found or best_cnt >= CELL_CAP:
+		# 周围满了只是"暂时没地方"，不能注销配额：
+		# 邻格被射流打空之后，这个粒子必须还能往缺口里生。
+		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
+		return
+
+	var jitter := deg_to_rad(_rng.randf_range(-12.0, 12.0))
+	var nd := best_dir.rotated(jitter)
+	var dist := _rng.randf_range(SPAWN_D_MIN, SPAWN_D_MAX)
+	var nx := _px[i] + nd.x * dist
+	var ny := _py[i] + nd.y * dist
 	if nx < ARENA_PAD or nx > ARENA_W - ARENA_PAD or ny < ARENA_PAD or ny > ARENA_H - ARENA_PAD:
-		_pquota[i] = 0
+		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
 		return
 	if _cell_count(nx, ny) >= CELL_CAP:
 		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
@@ -275,7 +301,6 @@ func _replicate(i: int) -> void:
 
 	_spawn(nx, ny, _rng.randf_range(R_MIN, R_MAX), 0, QUOTA_CHILD, _pvid[i],
 		0.0, _rng.randf_range(COOL_MIN, COOL_MAX))
-	_pquota[i] = maxi(0, _pquota[i] - 1)
 	_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
 
 

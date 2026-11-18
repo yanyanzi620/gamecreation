@@ -62,16 +62,20 @@ func _ready() -> void:
 
 
 func _sequence() -> void:
-	await get_tree().create_timer(2.5).timeout
-	_fire(Vector2(1120.0, 520.0))
-	await get_tree().create_timer(0.95).timeout
-	_fire(Vector2(1040.0, 440.0))
-	await get_tree().create_timer(0.20).timeout
+	await get_tree().create_timer(2.0).timeout
+	_fire(Vector2(1080.0, 520.0))
+	await get_tree().create_timer(0.25).timeout
+	_save("res://shot_a.png")
+	await get_tree().create_timer(5.0).timeout
+	_save("res://shot_b.png")
+	get_tree().quit()
+
+
+func _save(path: String) -> void:
 	var img := get_viewport().get_texture().get_image()
-	var p := ProjectSettings.globalize_path("res://shot_demo.png")
+	var p := ProjectSettings.globalize_path(path)
 	img.save_png(p)
 	print("[SHOT] ", p)
-	get_tree().quit()
 
 
 func _fire(target: Vector2) -> int:
