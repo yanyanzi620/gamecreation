@@ -29,8 +29,10 @@ func _ready() -> void:
 	_a4()
 	_a5()
 	_a6()
+	_a7()
+	_a8()
+	_a9()
 	_det()
-	_perf()
 
 	print("--------------------------------------------------------------")
 	if fails == 0:
@@ -73,6 +75,11 @@ func _has_block(uid: int) -> bool:
 		if int(w["uid"]) == uid:
 			return true
 	return false
+
+
+func _spawn_only_sphere(pos: Vector2, r: float, grow: float) -> Dictionary:
+	spread.spawn(pos, r, grow)
+	return spread.fields[spread.fields.size() - 1]
 
 
 # ============================================================ A1 阻断带硬度
@@ -257,19 +264,67 @@ func _det() -> void:
 		fails += 1
 
 
-# ============================================================ 性能（A9 口径，C3 转正式断言）
+# ============================================================ A7 球状绕射
 
-func _perf() -> void:
+func _a7() -> void:
+	spread.clear()
+	var f = _spawn_only_sphere(Vector2.ZERO, 40.0, 3.0)
+	var fid: int = int(f["id"])
+	# 卡内显式端点 a=(-130,60) b=(130,60)：墙在球心正上方，球判 hard
+	block.place_at(Vector2(0.0, 60.0), Vector2(1.0, 0.0), 260.0, Vector2(0.0, 1.0))
+	block.tick(2.0)
+	var mode: String = block.active_blocks()[0]["per_field"][fid]
+
+	for i in 600:
+		spread.step(STEP, FAR, false, PRADIUS, RATE)
+
+	var radii: PackedFloat32Array = f["radii"]
+	var r90 := radii[12]                   # 90° = index 12，正对墙 → 压平
+	var r45 := radii[6]                    # 45° = index 6，墙端外 → 自由鼓包
+	var diff := r45 - r90
+	var ok: bool = mode == "hard" and absf(r90 - 59.5) <= 3.0 and absf(r45 - 70.0) <= 3.0 and diff >= 8.0
+	_check("A7", "球状绕射", ok, 59.5, r90, 3.0,
+		"45°=%.2f（自由 70）两者差 %.2f（≥8 才算真绕射）；判定=%s" % [r45, diff, mode])
+
+
+# ============================================================ A8 圆度回归
+
+func _a8() -> void:
+	spread.clear()
+	RNG.reset(12345)
+	var f = _spawn_only_sphere(Vector2.ZERO, 40.0, 3.0)
+	for i in 600:
+		spread.step(STEP, FAR, false, PRADIUS, RATE)
+
+	var radii: PackedFloat32Array = f["radii"]
+	var mn := 1.0e9
+	var mx := -1.0e9
+	var sum := 0.0
+	for r in radii:
+		mn = minf(mn, r)
+		mx = maxf(mx, r)
+		sum += r
+	var mean := sum / float(radii.size())
+	var span := mx - mn
+	var ok: bool = span <= 1.4 and absf(mean - 70.0) <= 1.0
+	_check("A8", "圆度回归", ok, 1.4, span, 0.0, "48 半径均值 %.3f（应为 70），极差 %.5f" % [mean, span])
+
+
+# ============================================================ A9 性能
+
+func _a9() -> void:
 	spread.clear()
 	for i in 8:
-		spread.spawn(Vector2(300.0 + float(i) * 200.0, 300.0), 70.0, 0.0)
+		spread.spawn(Vector2(300.0 + float(i) * 200.0, 300.0), 70.0, 3.0)
 	for i in 4:
 		spread.spawn_band(Vector2(200.0 + float(i) * 400.0, 1300.0), Vector2(1.0, 0.0))
 	block.place_at(Vector2(600.0, 600.0), Vector2(1.0, 0.0), 260.0, Vector2(0.0, 1.0))
 	block.place_at(Vector2(1400.0, 600.0), Vector2(1.0, 0.0), 260.0, Vector2(0.0, 1.0))
+	block.tick(2.0)                       # 起效后再测：裁剪与松弛都要在负载里
 
 	var t0 := Time.get_ticks_usec()
 	for i in 200:
 		spread.step(STEP, FAR, false, PRADIUS, RATE)
-	var us: float = float(Time.get_ticks_usec() - t0) / 200.0
-	_info("PERF", "8 球 4 带 2 墙", "单 tick %.1f us（上限 300 us）" % us)
+	var us := float(Time.get_ticks_usec() - t0) / 200.0
+	_check("A9", "性能", us <= 300.0, 0.300, us / 1000.0, 0.0,
+		"8 球 48 射线 × 2 墙 + 4 带，单 tick %.1f us（上限 300 us）" % us)

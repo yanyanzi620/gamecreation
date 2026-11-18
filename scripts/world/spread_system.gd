@@ -43,6 +43,9 @@ var _sphere: Dictionary = {}
 var _blocks_cfg: Dictionary = {}
 var _force_turn: Dictionary = {}
 var _demo := false
+var _ray_n := 0
+var _ray_dirs := PackedVector2Array()    # 射线方向缓存：每 tick 每场×每墙都要用，避免重复三角函数
+var _ray_ang := PackedFloat32Array()     # 同上，角度缓存（净化扇区用）
 
 
 func _ready() -> void:
@@ -121,11 +124,16 @@ func virus_fields() -> Array:
 func spawn(pos: Vector2, r: float, grow: float) -> int:
 	_ensure_cfg()
 	_next_field_id += 1
+	var n := int(_sphere.get("ray_count", 48))
+	var radii := PackedFloat32Array()
+	radii.resize(n)
+	for i in n:
+		radii[i] = r
 	fields.append({
 		"id": _next_field_id,
 		"kind": "sphere",
 		"pos": pos,
-		"r": r,
+		"radii": radii,
 		"grow": grow,
 		"sd": RNG.spread.randi() % 1000,
 	})
@@ -191,7 +199,7 @@ func main_radius() -> float:
 	var total := 0.0
 	for f in fields:
 		if f["kind"] == "sphere":
-			total += float(f["r"])
+			total += _sphere_mean(f)
 		else:
 			total += float(f["net"])
 	return total
@@ -203,7 +211,7 @@ func gradient_at(pos: Vector2) -> float:
 		var r := 0.0
 		var d := 0.0
 		if f["kind"] == "sphere":
-			r = float(f["r"])
+			r = _sphere_mean(f)
 			d = pos.distance_to(f["pos"])
 		else:
 			r = float(f["width"])
@@ -230,7 +238,7 @@ func step(dt: float, player_pos: Vector2, purifying: bool, pradius: float, rate:
 	var engaged := 0
 	for f in fields:
 		if f["kind"] == "sphere":
-			if _step_sphere(f, dt, player_pos, purifying, pradius, rate):
+			if _step_sphere(f, dt, player_pos, purifying, pradius, rate, walls):
 				engaged += 1
 	for f in fields:
 		if f["kind"] != "band":
@@ -240,35 +248,99 @@ func step(dt: float, player_pos: Vector2, purifying: bool, pradius: float, rate:
 
 	var alive := []
 	for f in fields:
-		if f["kind"] == "band" or float(f["r"]) > ALIVE_EPS:
+		if f["kind"] == "band" or _sphere_mean(f) > ALIVE_EPS:
 			alive.append(f)
 	fields = alive
 	_redraw()
 	return engaged
 
 
-# ------------------------------------------------------------ 球状（C1：单半径；C3 换 48 射线）
+# ------------------------------------------------------------ 球状（48 射线可变边界，§4.3）
 
-func _step_sphere(f: Dictionary, dt: float, player_pos: Vector2, purifying: bool, pradius: float, rate: float) -> bool:
-	var r := float(f["r"]) + float(f["grow"]) * dt
-	f["r"] = r
-	if r <= 0.0:
+func _ensure_dirs(n: int) -> void:
+	if _ray_n == n:
+		return
+	_ray_n = n
+	_ray_dirs.resize(n)
+	_ray_ang.resize(n)
+	for k in n:
+		var th := TAU * float(k) / float(n)
+		_ray_dirs[k] = Vector2(cos(th), sin(th))
+		_ray_ang[k] = th
+
+
+func _sphere_mean(f: Dictionary) -> float:
+	var radii: PackedFloat32Array = f["radii"]
+	if radii.size() == 0:
+		return 0.0
+	var total := 0.0
+	for r in radii:
+		total += r
+	return total / float(radii.size())
+
+
+func _step_sphere(f: Dictionary, dt: float, player_pos: Vector2, purifying: bool, pradius: float, rate: float, walls: Array) -> bool:
+	var radii: PackedFloat32Array = f["radii"]
+	var n := radii.size()
+	if n == 0:
 		return false
 	var pos: Vector2 = f["pos"]
-	if not purifying:
-		return false
-	var d := pos.distance_to(player_pos)
-	if d >= pradius + r:
-		return false
-	var eff := clampf(1.0 - d / (pradius + r), 0.0, 1.0)
-	var cut := rate * eff
-	if d >= r:
-		# 只压边界：净化不能靠穿场实现
-		f["r"] = maxf(0.0, r - cut * dt)
-	else:
-		var delta := clampf(cut - r / dt, 0.0, r / dt)
-		f["r"] = maxf(0.0, r - delta * dt)
-	return true
+	var grow := float(f["grow"]) * dt
+	_ensure_dirs(n)
+
+	# 1 扩张：所有射线各自匀速外推（自由时仍是完美圆）
+	for i in n:
+		radii[i] += grow
+
+	# 2 硬墙裁剪：本场判 hard 的墙才拦，射线求交后收到墙前 clip_margin
+	var clip := float(_sphere.get("clip_margin", 0.5))
+	for wall in walls:
+		if _field_mode(wall, f["id"]) != "hard":
+			continue
+		var wa: Vector2 = wall["a"]
+		var ab: Vector2 = wall["b"] - wa
+		for i in n:
+			var dv := _ray_dirs[i]
+			var den := dv.cross(ab)
+			if absf(den) <= SEG_EPS:
+				continue                        # 射线与墙平行
+			var ap := wa - pos
+			var tt := ap.cross(ab) / den
+			var uu := ap.cross(dv) / den
+			if tt <= 0.0 or uu < 0.0 or uu > 1.0:
+				continue                        # 交点在背后或墙段外
+			if tt < radii[i]:
+				radii[i] = tt - clip
+
+	# 3 邻域松弛：被压平的角度把"平"递给邻居，端点外仍自由扩张 → 两端鼓包
+	var relax := float(_sphere.get("relax_rate", 0.03))
+	var tmp := PackedFloat32Array()
+	tmp.resize(n)
+	for i in n:
+		tmp[i] = radii[i] * (1.0 - relax) + (radii[(i - 1 + n) % n] + radii[(i + 1) % n]) * (relax * 0.5)
+	for i in n:
+		radii[i] = tmp[i]
+
+	# 4 净化扇区：只对朝向玩家的 ±arc/2 扇区生效，下限 min_radius
+	var engaged := false
+	if purifying:
+		var to_player := player_pos - pos
+		if to_player.length_squared() < 1.0:
+			to_player = Vector2.RIGHT
+		var reach := pradius + _sphere_mean(f)
+		if to_player.length() < reach:
+			var half_arc := deg_to_rad(float(_sphere.get("purify_arc_deg", 90.0)) * 0.5)
+			var base := to_player.angle()
+			var floor_r := float(_sphere.get("min_radius", 8.0))
+			var cut := float(rate) * dt
+			for i in n:
+				var th := _ray_ang[i]
+				if absf(angle_difference(base, th)) <= half_arc:
+					radii[i] = maxf(floor_r, radii[i] - cut)
+					engaged = true
+
+	f["radii"] = radii
+	return engaged
 
 
 # ------------------------------------------------------------ 带状
@@ -482,15 +554,14 @@ func _draw() -> void:
 
 func _draw_sphere(f: Dictionary) -> void:
 	var pos: Vector2 = f["pos"]
-	var r := float(f["r"])
-	if r <= 0.0:
+	var radii: PackedFloat32Array = f["radii"]
+	var n := radii.size()
+	if n < 3:
 		return
+	_ensure_dirs(n)
 	var pts := PackedVector2Array()
-	var n := 40
-	for k in n:
-		var a := TAU * float(k) / float(n)
-		var rr := r * (1.0 + WOB * 0.6 * _wob(k, int(f["sd"])))
-		pts.append(pos + Vector2(cos(a), sin(a)) * rr)
+	for i in n:
+		pts.append(pos + _ray_dirs[i] * radii[i])
 	draw_colored_polygon(pts, COL_SPHERE_FILL)
 	pts.append(pts[0])
 	draw_polyline(pts, COL_SPHERE_EDGE, 2.0)

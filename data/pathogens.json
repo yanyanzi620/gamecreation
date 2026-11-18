@@ -1,8 +1,13 @@
 {
   "sphere": {
     "grow_units_per_sec": 3.0,
+    "ray_count": 48,
+    "relax_rate": 0.03,
+    "purify_arc_deg": 90.0,
+    "clip_margin": 0.5,
+    "min_radius": 8.0,
     "counter": "purify_field",
-    "desc": "球状：半径匀速增长，从外侧压最高效"
+    "desc": "球状：48 射线可变边界，遇硬墙压平并绕射"
   },
   "band": {
     "grow_units_per_sec": 30.0,
