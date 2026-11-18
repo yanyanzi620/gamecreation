@@ -1,0 +1,17 @@
+{
+  "block_band": {
+    "place_distance": 120.0,
+    "length": 260.0,
+    "arm_seconds": 2.0,
+    "blink_hz": 4.0,
+    "life_seconds": 30.0,
+    "max_concurrent": 2,
+    "soft_speed_multiplier": 0.4,
+    "layer_multipliers": [1.0, 0.5, 0.25],
+    "hard_stop_margin": 1.0
+  },
+  "arena": {
+    "width": 2400.0,
+    "height": 1500.0
+  }
+}
