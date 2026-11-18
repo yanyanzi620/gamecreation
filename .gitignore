@@ -56,3 +56,7 @@ $RECYCLE.BIN/
 *.temp
 *.bak
 *.log
+
+# 本地验收截图
+shot_*.png
+
