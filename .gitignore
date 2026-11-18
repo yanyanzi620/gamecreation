@@ -60,3 +60,10 @@ $RECYCLE.BIN/
 # 本地验收截图
 shot_*.png
 
+shot_*.png.import
+
+
+# 本地推送辅助脚本（不进版本库）
+push-to-github.ps1
+一键推送.bat
+

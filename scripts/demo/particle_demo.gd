@@ -28,7 +28,7 @@ func _ready() -> void:
 	pop = load("res://scripts/world/virus_population.gd").new()
 	pop.name = "Virus"
 	add_child(pop)
-	pop.seed_blob(Vector2(980.0, 540.0), 135.0, 380)
+	pop.seed_blob(Vector2(980.0, 540.0), 118.0, 300)
 
 	jet = load("res://scripts/units/tools/jet_system.gd").new()
 	jet.name = "Jet"
