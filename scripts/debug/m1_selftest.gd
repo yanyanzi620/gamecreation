@@ -15,6 +15,7 @@ var total := 0
 
 
 func _ready() -> void:
+	RNG.reset(12345)                     # 同 seed 连跑两次必须逐字节一致
 	spread = load("res://scripts/world/spread_system.gd").new()
 	block = load("res://scripts/units/tools/block_system.gd").new()
 	spread._ensure_cfg()
@@ -27,6 +28,7 @@ func _ready() -> void:
 	_a3()
 	_a4()
 	_a5()
+	_a6()
 	_det()
 	_perf()
 
@@ -196,6 +198,38 @@ func _a5() -> void:
 	var ok: bool = c3 == -1 and gone > 0.0 and absf(gone - 30.0) <= STEP + 1e-6
 	_check("A5", "上限与寿命", ok, 30.0, gone, 0.017,
 		"第 3 条返回 %d；前两条 t=0 同时放置，同 tick 到期消失" % c3)
+
+
+# ============================================================ A6 带状折线
+
+func _a6() -> void:
+	spread.clear()
+	RNG.reset(12345)
+	var f = _spawn_only_band(Vector2(500.0, 700.0), Vector2(1.0, 0.0))
+	for i in 600:
+		spread.step(STEP, FAR, false, PRADIUS, RATE)
+
+	var pth: PackedVector2Array = f["path"]
+	var max_ang := 0.0
+	for i in range(1, pth.size() - 1):
+		var a := (pth[i] - pth[i - 1]).normalized()
+		var b := (pth[i + 1] - pth[i]).normalized()
+		max_ang = maxf(max_ang, rad_to_deg(absf(a.angle_to(b))))
+
+	var first := pth[0]
+	var last := pth[pth.size() - 1]
+	var chord := last - first
+	var dev := 0.0
+	if chord.length() > 1.0:
+		chord = chord.normalized()
+		for p in pth:
+			dev = maxf(dev, absf((p - first).cross(chord)))
+
+	var turns := int(f["turns"])
+	var ok: bool = turns >= 3 and pth.size() >= 4 and max_ang <= 40.0 and dev >= 6.0
+	_check("A6", "带状折线", ok, 8.0, dev, 2.0,
+		"转向 %d 次 / 顶点 %d 个 / 最大相邻段夹角 %.1f° / 偏离首末连线 %.1f" % [
+			turns, pth.size(), max_ang, dev])
 
 
 # ============================================================ 双跑确定性（DoD，不占 A 位）

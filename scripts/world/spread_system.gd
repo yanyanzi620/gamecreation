@@ -41,6 +41,7 @@ var _mismatch := 1.5
 var _band: Dictionary = {}
 var _sphere: Dictionary = {}
 var _blocks_cfg: Dictionary = {}
+var _force_turn: Dictionary = {}
 var _demo := false
 
 
@@ -100,6 +101,8 @@ func _read_json(path: String) -> void:
 			spawn_band(Vector2(200.0, 900.0), Vector2(1.0, -0.08))
 	else:
 		_blocks_cfg = parsed
+		var fb = parsed.get("band", {})
+		_force_turn = fb if typeof(fb) == TYPE_DICTIONARY else {}
 
 
 # ============================================================ 对外接口
@@ -295,7 +298,15 @@ func _step_band(f: Dictionary, dt: float, walls: Array, player_pos: Vector2, pur
 	f["stuck"] = (float(f["stuck"]) + dt) if blocked else 0.0
 	head = nh
 
-	# 4 转向节拍 / 5 解死锁：C2
+	# 4 转向节拍：累计推进够 90 就抖一次（随机只出现在这一步和下一步）
+	if float(f["travel"]) >= float(f["next_turn_at"]):
+		_turn(f, false)
+		f["next_turn_at"] = float(f["next_turn_at"]) + float(_band.get("turn_interval", 90.0))
+
+	# 5 解死锁：顶墙太久就强行拐 60~90° 走开，避免病毒被墙+边界夹死
+	if float(f["stuck"]) >= float(_force_turn.get("stuck_timeout", 1.5)):
+		_turn(f, true)
+		f["stuck"] = 0.0
 
 	# 6 净化回退：head -= dir*(rate/1.5)*dt，不得退过 path[0]
 	var engaged := false
@@ -320,6 +331,27 @@ func _step_band(f: Dictionary, dt: float, walls: Array, player_pos: Vector2, pur
 	f["net"] = ln
 	f["consumed"] = float(f["peak"]) - ln
 	return engaged
+
+
+# 转向：force=false 走"每 90 单位抖 ±25°，绝对值 ≤40°"；force=true 走"60~90° 解死锁"
+func _turn(f: Dictionary, force: bool) -> void:
+	var deg := 0.0
+	if force:
+		var lo := float(_force_turn.get("force_turn_min_deg", 60.0))
+		var hi := float(_force_turn.get("force_turn_max_deg", 90.0))
+		deg = RNG.spread.randf_range(lo, hi)
+		if RNG.spread.randf() < 0.5:
+			deg = -deg
+	else:
+		var jit := float(_band.get("turn_jitter_deg", 25.0))
+		var mx := float(_band.get("max_turn_deg", 40.0))
+		deg = clampf(RNG.spread.randf_range(-jit, jit), -mx, mx)
+	var cur: Vector2 = f["dir"]
+	f["dir"] = cur.rotated(deg_to_rad(deg))
+	f["turns"] = int(f["turns"]) + 1
+	var pth: PackedVector2Array = f["path"]
+	pth.append(f["head"])
+	f["path"] = pth
 
 
 func _field_mode(wall: Dictionary, fid: int) -> String:
@@ -351,6 +383,8 @@ func _hard_block(head: Vector2, delta: Vector2, walls: Array, fid: int) -> Vecto
 		var c: Vector2 = wall["center"]
 		var s0: float = (head - c).dot(nrm)
 		var s1: float = (target - c).dot(nrm)
+		if s0 > 0.0:
+			continue                       # 已从端点绕到墙的另一侧，这道墙拦不住它
 		if s1 - s0 <= ALIVE_EPS:
 			continue                       # 没朝墙走
 		var t := (-margin - s0) / (s1 - s0)

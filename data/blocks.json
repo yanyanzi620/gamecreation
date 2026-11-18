@@ -10,6 +10,11 @@
     "layer_multipliers": [1.0, 0.5, 0.25],
     "hard_stop_margin": 1.0
   },
+  "band": {
+    "force_turn_min_deg": 60.0,
+    "force_turn_max_deg": 90.0,
+    "stuck_timeout": 1.5
+  },
   "arena": {
     "width": 2400.0,
     "height": 1500.0
