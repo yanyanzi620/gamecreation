@@ -1,0 +1,26 @@
+{
+  "heart": {
+    "label": "HEART",
+    "buff": {
+      "o2_max": 25,
+      "vision_clear_sec": 15,
+      "purify_pct": 20
+    },
+    "cost": "toxin spread accelerated 15s; heart starts at infection edge"
+  },
+  "torso": {
+    "label": "TORSO",
+    "buff": {
+      "route_time_pct": -30
+    },
+    "cost": "no combat buff; 2 organs already infected at start"
+  },
+  "muscle": {
+    "label": "MUSCLE",
+    "buff": {
+      "nutrient_start": 100
+    },
+    "cost": "route to heart/brain x1.5; core organs undefended at start"
+  },
+  "coop_second_injector_effect_pct": 50
+}

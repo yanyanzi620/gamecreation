@@ -1,0 +1,36 @@
+{
+  "clearer": {
+    "label": "CLEARER",
+    "purify_per_sec": 2.5,
+    "purify_radius": 1.5,
+    "scavenge_per_sec": 2.0,
+    "durability": 60,
+    "speed": 100
+  },
+  "blocker": {
+    "label": "BLOCKER",
+    "purify_per_sec": 0.5,
+    "purify_radius": 1.0,
+    "scavenge_per_sec": 2.0,
+    "durability": 90,
+    "speed": 70
+  },
+  "scavenger": {
+    "label": "SCAVENGER",
+    "purify_per_sec": 0.0,
+    "purify_radius": 0.0,
+    "scavenge_per_sec": 8.0,
+    "durability": 70,
+    "speed": 90
+  },
+  "autonomy": {
+    "hold_offset": 5.0,
+    "high_pressure_i": 60.0,
+    "lose_ground_chance_per_sec": 0.15,
+    "lose_ground_i": 2.0
+  },
+  "structure": {
+    "max": 30,
+    "autonomous_decay_per_20s": 1
+  }
+}

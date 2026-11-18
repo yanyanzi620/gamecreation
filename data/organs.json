@@ -1,0 +1,38 @@
+{
+  "lung": {
+    "label": "LUNG",
+    "weight": 2,
+    "topology": "branch_tree",
+    "start_i": 12
+  },
+  "kidney": {
+    "label": "KIDNEY",
+    "weight": 2,
+    "topology": "array",
+    "start_i": 18
+  },
+  "heart": {
+    "label": "HEART",
+    "weight": 3,
+    "topology": "ring",
+    "start_i": 6
+  },
+  "liver": {
+    "label": "LIVER",
+    "weight": 2,
+    "topology": "porous_lobes",
+    "start_i": 0
+  },
+  "muscle": {
+    "label": "MUSCLE",
+    "weight": 1,
+    "topology": "strip",
+    "start_i": 0
+  },
+  "brain": {
+    "label": "BRAIN",
+    "weight": 3,
+    "topology": "none",
+    "start_i": 0
+  }
+}

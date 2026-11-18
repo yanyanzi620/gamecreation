@@ -1,0 +1,37 @@
+{
+  "nutrient": {
+    "corpse_value_scavenger": 5,
+    "corpse_value_other": 2,
+    "corpse_per_1pct_clear": 0.15,
+    "phase_reward": 30,
+    "start": 50,
+    "start_muscle_inject": 100,
+    "start_coop": 25
+  },
+  "shop": {
+    "enzyme_slot": {
+      "cost": 40,
+      "max": 5
+    },
+    "ibuprofen": {
+      "cost": 25,
+      "max": 99
+    },
+    "cardiotonic": {
+      "cost": 45,
+      "max": 99
+    },
+    "purify_up": {
+      "cost": 60,
+      "max": 3
+    },
+    "new_unit": {
+      "cost": 120,
+      "max": 5
+    },
+    "skip_objective": {
+      "cost": 40,
+      "max": 1
+    }
+  }
+}

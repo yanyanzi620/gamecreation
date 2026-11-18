@@ -1,0 +1,27 @@
+{
+  "sphere": {
+    "grow_units_per_sec": 3.0,
+    "counter": "purify_field",
+    "desc": "球状：半径匀速增长，从外侧压最高效"
+  },
+  "band": {
+    "grow_units_per_sec": 30.0,
+    "width": 12.0,
+    "counter": "block_band",
+    "desc": "带状：沿管路单向推进，垂直横切最省"
+  },
+  "radial": {
+    "grow_units_per_sec": 25.0,
+    "branches": 4,
+    "counter": "source_node",
+    "desc": "辐射：从节点分叉，堵源头"
+  },
+  "random": {
+    "spawns_per_sec": 12,
+    "walk_units_per_sec": 10.0,
+    "life_sec": 8.0,
+    "counter": "wide_cover",
+    "desc": "随机：碎斑游走，广域覆盖或引信聚拢"
+  },
+  "mismatch_efficiency_penalty": 1.5
+}
