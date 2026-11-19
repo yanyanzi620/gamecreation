@@ -52,8 +52,8 @@ const ARENA_PAD := 30.0
 # ------------------------------------------------------------ 生长
 const R_MIN := 4.5
 const R_MAX := 8.0
-const COOL_MIN := 0.80
-const COOL_MAX := 1.55
+const COOL_MIN := 1.40
+const COOL_MAX := 2.50
 const SPAWN_D_MIN := 14.0
 const SPAWN_D_MAX := 26.0
 const PROBE_DIST := 30.0        # 探一格
@@ -61,8 +61,8 @@ const PROBE_DIST := 30.0        # 探一格
 # 跳跃链 = 单点传播：不粘连、不稳方向，只保证「整体往前推」
 # 每次繁殖在空中随机落一个点，点与点之间天然留空，视觉上不会糊成条带
 const CHAIN_SPREAD_DEG := 38.0   # 落点相对主轴的最大偏角
-const CHAIN_STEP_MIN := 95.0     # 落点距离
-const CHAIN_STEP_MAX := 190.0
+const CHAIN_STEP_MIN := 70.0     # 落点距离
+const CHAIN_STEP_MAX := 150.0
 
 # ------------------------------------------------------------ 阻隔带
 const BLK_ARM := 0.45           # 释放后闪烁多久才生效
