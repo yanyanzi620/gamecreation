@@ -77,7 +77,7 @@ const BLK_STATE_ON := 1
 # 空格放一个引信：小圈里的圆盘/带状直接消融，
 # 大圈里的跳跃链被逐帧拽向小圈，进圈即灭。
 const FUSE_KILL := 85.0        # 小范围：圆盘 / 带状直接消融
-const FUSE_PULL := 300.0       # 更大的范围：只对跳跃链生效，往中心拽
+const FUSE_PULL := 220.0       # 更大的范围：只对跳跃链生效，往中心拽
 const FUSE_SPEED := 250.0      # 被拽的速度 px/s
 const FUSE_LIFE := 3.0         # 引信维持多久
 const MAX_FUSE := 3
