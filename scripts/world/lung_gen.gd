@@ -230,6 +230,7 @@ func _lobe(m: OrganMap, rng: RandomNumberGenerator, rect: Rect2) -> void:
 	for i in keep:
 		m.add_circle(cx[i], cr[i])
 		_alv.append([cx[i], cr[i]])
+		_alv_detail(m, rng, cx[i], cr[i])
 
 	# 随机生成树：连通但不直廊
 	var in_tree := {}
@@ -302,6 +303,77 @@ func _lobe(m: OrganMap, rng: RandomNumberGenerator, rect: Rect2) -> void:
 			if rng.randf() > PORE_CHANCE:
 				continue
 			m.add_capsule(cx[i], cx[j], rng.randf_range(PORE_R_MIN, PORE_R_MAX))
+
+
+# 单个肺泡的腔室内装饰（纯视觉）。注意：全部画在圆内，不碰墙、不参与碰撞。
+#   间隔小突：从壁往腔内伸的一小段（真实肺泡的肺泡间隔上就有这种突起）
+#   毛细血管弧：贴着腔壁走的一圈线，给平坦的腔室一点「体内」的感觉
+#   上皮斑点：腔内散布的小点，压住死平的色块
+func _alv_detail(m: OrganMap, rng: RandomNumberGenerator, c: Vector2, r: float) -> void:
+	var k: float = r / 126.0                     # 跟着肺泡尺寸缩放，大肺泡的装饰也大
+	# 沿壁短弧：让腔壁看起来是「有厚度的间隔」，而不是一根发亮的等高线
+	var rims := int(rng.randi_range(3, 6))
+	for s in range(rims):
+		var a0 := rng.randf() * TAU
+		var span := rng.randf_range(0.22, 0.55)
+		var pts0 := PackedVector2Array()
+		for i in range(7):
+			var t0 := float(i) / 6.0
+			var aa0 := a0 + span * t0
+			pts0.append(c + Vector2(cos(aa0), sin(aa0)) * (r * 0.94))
+		m.detail.append([pts0, 0])
+
+	# 间隔小突：从壁上往腔内伸的一段（起点落在 r + 8，压到墙线上去，看起来是「从墙上长出来」）。
+	# 数量少、伸得长、带弧度 —— 短而直的线看起来像划痕，长而弯的才像肉。
+	var spurs := int(rng.randi_range(2, 4))
+	for s in range(spurs):
+		var a1 := rng.randf() * TAU
+		var deep := rng.randf_range(0.30, 0.55) * r    # 伸进去多深
+		var bend := rng.randf_range(-0.26, 0.26)
+		var pts := PackedVector2Array()
+		for i in range(7):
+			var t := float(i) / 6.0
+			var aa := a1 + bend * t * t
+			pts.append(c + Vector2(cos(aa), sin(aa)) * ((r + 8.0) - (deep + 8.0) * t))
+		m.detail.append([pts, 0])
+
+	# 隔膜弦线：跨过腔室的一道浅弧（真实肺里肺泡之间本来就有薄间隔横在其中），
+	# 作用是把大片空腔切成"有结构"的几块，压掉死平感
+	var chords := int(rng.randi_range(1, 2))
+	for s in range(chords):
+		var c0 := rng.randf() * TAU
+		var cspan := rng.randf_range(0.9, 1.9)
+		var lift := rng.randf_range(0.55, 0.85)
+		var pts3 := PackedVector2Array()
+		for i in range(9):
+			var t3 := float(i) / 8.0
+			var aa3 := c0 + cspan * t3
+			# 从壁上的 A 点，经腔内，再到壁上的 B 点：半径按抛物线收进去
+			var rr3 := r * (1.0 - lift * sin(t3 * PI) * 0.55)
+			pts3.append(c + Vector2(cos(aa3), sin(aa3)) * rr3)
+		m.detail.append([pts3, 2])
+
+	var caps := int(rng.randi_range(2, 4))
+	for s in range(caps):
+		var a2 := rng.randf() * TAU
+		var span2 := rng.randf_range(0.5, 1.4)
+		var rr := r * rng.randf_range(0.55, 0.82)
+		var pts2 := PackedVector2Array()
+		for i in range(12):
+			var t2 := float(i) / 11.0
+			var aa2 := a2 + span2 * t2
+			# 加点径向抖动，别让它们像同心圆
+			var wob := r * 0.03 * sin(t2 * 6.0)
+			pts2.append(c + Vector2(cos(aa2), sin(aa2)) * (rr + wob))
+		m.detail.append([pts2, 1])
+
+	var specks := int(rng.randi_range(5, 11))
+	for s in range(specks):
+		var ang := rng.randf() * TAU
+		var rr2 := r * sqrt(rng.randf()) * 0.88
+		var p := c + Vector2(cos(ang), sin(ang)) * rr2
+		var dir := Vector2(cos(ang + 1.4), sin(ang + 1.4)) * rng.randf_range(1.6, 3.4) * k
+		m.detail.append([PackedVector2Array([p, p + dir]), 2])
 
 
 # 整个圆是否落在器官轮廓内（8 方向采样）

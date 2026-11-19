@@ -33,6 +33,10 @@ var seg_a := PackedVector2Array()
 var seg_b := PackedVector2Array()
 
 var decor: Array = []              # 纯视觉装饰：[中心, 半径]，不参与碰撞
+# 腔室内装饰（纯视觉，不参与碰撞）：[PackedVector2Array 折线, 层号]
+#   层号 0 = 肺泡间隔小突（亮） / 1 = 毛细血管弧（暗红） / 2 = 上皮斑点（淡）
+#   由 lung_gen 在铺肺泡时顺手生成，organ_view 用 draw_multiline 一次性批量画出来
+var detail: Array = []
 var build_ms := 0
 var free_ratio := 0.0
 var shape_count := 0

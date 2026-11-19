@@ -87,6 +87,8 @@ func _build() -> void:
 	view = load("res://scripts/world/organ_view.gd").new()
 	view.name = "OrganView"
 	view.z_index = -2
+	# 命令行 -- --decor-off 可以出一张纯灰盒底图，用 F 键也能在运行时切
+	view.decor_on = Balance.DECOR_ON and not OS.get_cmdline_user_args().has("--decor-off")
 	add_child(view)
 
 	pop = load("res://scripts/world/virus_population.gd").new()
@@ -155,7 +157,7 @@ func _build_hud() -> void:
 	_hint.position = Vector2(18.0, 156.0)
 	_hint.add_theme_font_size_override("font_size", 13)
 	_hint.add_theme_color_override("font_color", Color(0.60, 0.68, 0.64))
-	_hint.text = "WASD 移动（镜头跟随） · 左键 = 射流 · 右键 = 阻隔带(30) · 空格 = 引信(40) · R = 换一张肺"
+	_hint.text = "WASD 移动（镜头跟随） · 左键 = 射流 · 右键 = 阻隔带(30) · 空格 = 引信(40) · R = 换一张肺 · F = 装饰层"
 	layer.add_child(_hint)
 
 
@@ -280,6 +282,10 @@ func _unhandled_input(e: InputEvent) -> void:
 			return
 		if k.keycode == KEY_SPACE:
 			_place_fuse(get_global_mouse_position())
+		elif k.keycode == KEY_F:
+			if view != null:
+				view.set_decor_on(not view.decor_on)
+				print("[DECOR] on=%s" % str(view.decor_on))
 		elif k.keycode == KEY_R:
 			_reseed(true)
 		return
