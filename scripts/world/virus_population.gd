@@ -234,6 +234,31 @@ func arena_size() -> Vector2:
 
 # ============================================================ 池操作
 
+# 整场清空（重开用）：池、格子、尸体、阻隔带、引信全部归零
+func reset() -> void:
+	for i in range(TOTAL):
+		if _alive[i] == 1:
+			_alive[i] = 0
+			_write_slot(i)
+	_alive.fill(0)
+	_buf.fill(0.0)
+	_free.clear()
+	for i in range(TOTAL):
+		_free.append(i)
+	_n_live = 0
+	_n_corpse = 0
+	_kind_live.fill(0)
+	_cell.fill(0)
+	_v_origin.clear()
+	_v_axis.clear()
+	_v_kind.clear()
+	_blk.clear()
+	_fuse.clear()
+	_rng.seed = 20261119
+	_dirty = true
+	queue_redraw()
+
+
 func _spawn(x: float, y: float, r: float, type: int, kind: int, axis: float,
 		vid: int, page: float, cool: float) -> int:
 	if _free.is_empty():

@@ -66,4 +66,5 @@ shot_*.png.import
 # 本地推送辅助脚本（不进版本库）
 push-to-github.ps1
 一键推送.bat
-
+main_shot_*.png
+main_shot_*.png.import
