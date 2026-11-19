@@ -239,25 +239,34 @@ func _pick_near_center() -> Vector2:
 # 三种形态各找一块开阔流明播种，彼此至少隔开 380 像素
 func _spawn_wave() -> void:
 	_spawn_pts.clear()
-	for attempt in range(80):
-		if _spawn_pts.size() >= 3:
-			break
-		var cand: Vector2 = _map.random_free_point(_rng, 52.0)
-		var ok := true
-		for p in _spawn_pts:
-			if p.distance_to(cand) < 760.0:
-				ok = false
-				break
-		if ok:
-			_spawn_pts.append(cand)
+	# 肺泡放大后，随机撒点很容易两团都落在同一叶。改成「每个要求都被满足」：
+	# 左叶一团、右叶一团、第三个随意 —— 全身感染才符合玩法设定。
+	var mid_x: float = _map.size.x * 0.5
+	var wants: Array = [[0.0, mid_x], [mid_x, _map.size.x], [0.0, _map.size.x]]
+	for w in wants:
+		var cands: Array[Vector2] = []
+		for attempt in range(70):
+			var cand: Vector2 = _map.random_free_point(_rng, 60.0)
+			if cand.x < float(w[0]) or cand.x > float(w[1]):
+				continue
+			var ok := true
+			for p in _spawn_pts:
+				if p.distance_to(cand) < 620.0:
+					ok = false
+					break
+			# 找开阔处播种，不然一大半粒子直接落进肉壁被丢掉
+			if ok and _map.clearance(cand) >= 66.0:
+				cands.append(cand)
+		if cands.is_empty():
+			for attempt in range(70):
+				var cand2: Vector2 = _map.random_free_point(_rng, 60.0)
+				if cand2.x >= float(w[0]) and cand2.x <= float(w[1]):
+					cands.append(cand2)
+		var pick: Vector2 = cands[int(_rng.randi_range(0, cands.size() - 1))] if not cands.is_empty() else _map.size * 0.5
+		_spawn_pts.append(pick)
 
-	while _spawn_pts.size() < 3:
-		var fallback: Vector2 = _map.size * 0.5 + Vector2(float(_spawn_pts.size()) * 120.0, 0.0)
-		_spawn_pts.append(fallback)
-
-	# 场地面积从 4.0M 涨到 5.4M，播种量按面积再补一次
-	# 面积 5.4M -> 9.6M，播种量按面积同比补
-	pop.spawn_virus(KIND_BLOB, _spawn_pts[0], 160.0, 0.0, 1380, _rng.randf() * TAU)
+	# 场地面积 6200x2300 = 14.3M，两叶合计流明约 4.2M
+	pop.spawn_virus(KIND_BLOB, _spawn_pts[0], 150.0, 0.0, 1380, _rng.randf() * TAU)
 	pop.spawn_virus(KIND_BAND, _spawn_pts[1], 290.0, 46.0, 430, _rng.randf() * TAU)
 	pop.spawn_virus(KIND_CHAIN, _spawn_pts[2], 36.0, 0.0, 52, _rng.randf() * TAU)
 
@@ -511,21 +520,31 @@ func _shot_sequence() -> void:
 		get_tree().quit()
 		return
 	await get_tree().create_timer(0.60).timeout
-	# 站到第一个病毒团旁边，保证射流够得到（否则 hit 永远是 0）
+	# 朝「最开阔的那个方向」开火：肺泡放大后正前方常常 150 就撞墙，
+	# 硬写 RIGHT 会让验收永远 hit=0（那不是玩法坏了，是相机位置坏了）。
 	var aim := Vector2.RIGHT
-	var demo := player
-	if _spawn_pts.size() >= 1:
-		var target: Vector2 = _spawn_pts[0]
-		var behind: Vector2 = _map.nearest_free(target + Vector2(-300.0, 80.0), 260.0)
-		if behind.x > 0.0:
-			player = behind
+	var open_reach := 0.0
+	for k in range(16):
+		var a := TAU * float(k) / 16.0
+		var d := Vector2(cos(a), sin(a))
+		var r := 0.0
+		while r < 440.0 and not _map.solid_point(player + d * (r + 24.0)):
+			r += 24.0
+		if r > open_reach:
+			open_reach = r
+			aim = d
+	# 正前方补一团做验收（这团就是射流的靶）
+	var demo := player + aim * minf(open_reach - 70.0, 360.0)
+	if open_reach < 240.0:
+		# 四周都堵：先挪到附近最开阔的位置再试一次
+		var spot: Vector2 = _map.nearest_free(player + aim * 120.0, 300.0)
+		if spot.x > 0.0:
+			player = spot
 			cam.position = player
 			cam.reset_smoothing()
-			aim = (target - player).normalized()
-	# 相机跟随之后，固定坐标的老病毒团可能已经在射程外 —— 正前方补一团做验收
-	demo = player + aim * 360.0
+			demo = player + aim * 220.0
 	if not _map.solid_point(demo):
-		pop.spawn_virus(KIND_BLOB, demo, 78.0, 0.0, 150, 0.0)
+		pop.spawn_virus(KIND_BLOB, demo, 70.0, 0.0, 140, 0.0)
 	await get_tree().create_timer(0.60).timeout
 	# 第一发：路上没有阻隔带，扇形一直到肉壁为止（验证「被胸膜截断」）
 	_fire(demo)

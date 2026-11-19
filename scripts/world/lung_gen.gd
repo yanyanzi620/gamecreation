@@ -28,29 +28,33 @@ class_name LungGen
 
 # ---- 肺泡泡沫 ----
 # 配比口径：肺泡直径 2R ≈ 140，玩家直径 44 -> 面积占比 ≈ (22/70)^2 ≈ 10%
-const ALV_R_MIN := 70.0
-const ALV_R_MAX := 80.0
+# 肺泡放大 + 数量减少：单个腔室更大，地形不那么破碎，也不那么崎岖
+const ALV_R_MIN := 118.0
+const ALV_R_MAX := 134.0
 const ALV_JITTER_POS := 11.0
 const ALV_JITTER_R := 0.03
-const MIN_SEPTUM := 46.0        # 隔膜必须比门宽，肉壁才连得成网
+const MIN_SEPTUM := 62.0        # 隔膜必须比门宽，肉壁才连得成网（肺泡变大，隔膜同步加厚）
 const NEIGHBOR_RANGE := 1.16    # 以节距为单位，认定「相邻」的距离
 
 # ---- 连接管（玩家可走）----
 # 门宽随机：细门只够玩家侧身挤过，粗门能让病毒整股涌进去 —— 同一张图里有宽有窄才有机动感。
 # 下限按玩家碰撞半径卡死（0.72 * PLAYER_R(30) = 21.6），再小玩家就永远过不去。
-const DUCT_R_MIN := 20.0        # 门宽 40：刚才容得下玩家（0.72 * 26 = 18.7）
-const DUCT_R_MAX := 34.0        # 门宽 68：大通道，扩散会顺着它走，但不会宽到把整排骨腔糊成一条
-const EXTRA_LINK_CHANCE := 0.22 # 生成树之外再开这么多旁门，形成环路
+const DUCT_R_MIN := 34.0        # 门宽 68：一个大肺泡配一条像样的通道，不再是细缝
+const DUCT_R_MAX := 56.0        # 门宽 112：主通道，扩散会顺着它走
+const EXTRA_LINK_CHANCE := 0.30 # 生成树之外再开这么多旁门，形成环路
+const MAX_DOOR_GAP := 168.0     # 两腔室之间最远还能开门的空隙。
+                                # 之前写死 110 + 小肺泡，肺泡放大后大量树边被这个阈值砍掉，
+                                # 地图碎成 5~8 块孤岛（reach 只有 96%）。按新节距放大到 168 之后重新连成 1 块。
 
 # ---- 孔隙（只有病毒能过）----
-const PORE_R_MIN := 8.0
-const PORE_R_MAX := 13.0
-const PORE_RANGE := 16.0
+const PORE_R_MIN := 12.0
+const PORE_R_MAX := 20.0
+const PORE_RANGE := 20.0
 const PORE_CHANCE := 0.45
 
 # ---- 支气管主干 ----
-const TRUNK_R := 88.0           # 气管半径（176 宽）
-const BRANCH_R := 52.0          # 肺门分支半径（104 宽）
+const TRUNK_R := 96.0           # 气管半径（192 宽）
+const BRANCH_R := 64.0          # 肺门分支半径（128 宽）
 const BRANCH_COUNT := 3         # 每侧分支数，合计 6 个肺门
 
 # ---- 器官轮廓（按 3040×1320 写死，运行时按实际尺寸缩放）----
@@ -281,7 +285,7 @@ func _lobe(m: OrganMap, rng: RandomNumberGenerator, rect: Rect2) -> void:
 				extra.append([i, j])
 
 	for e3 in tree_edges + extra:
-		if cx[int(e3[0])].distance_to(cx[int(e3[1])]) - cr[int(e3[0])] - cr[int(e3[1])] > 110.0:
+		if cx[int(e3[0])].distance_to(cx[int(e3[1])]) - cr[int(e3[0])] - cr[int(e3[1])] > MAX_DOOR_GAP:
 			continue                     # 隔着肉壁太远，连过去会变成细长面条
 		_door(m, cx, cr, int(e3[0]), int(e3[1]), rng)
 
