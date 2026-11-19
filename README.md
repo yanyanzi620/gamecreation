@@ -1,72 +1,58 @@
-# 净化协议 — 灰盒工程 v0.1
+# 净化协议 (Purge Protocol)
 
-Godot 4.7（Standard，GDScript）。已在 Godot 4.7.stable 实机跑通：无脚本报错、可渲染、核心循环可玩。
+2D 俯视动作肉鸽 · 免疫题材 · Godot 4.7.2 / GDScript · PC 单机（后期双人）
 
-## 一、放进你的仓库
+你是打进体内的一个免疫单元，靠「清毒、封路、回收」把器官从感染里抢回来。
 
-1. 解压本包，把 **内容**（不是外层文件夹）拷到 `E:\gamecreation\`，与已有的 `.git` / `.gitattributes` / `.gitignore` 同级。
-2. 确认 `E:\gamecreation\project.godot` 存在 —— 这个文件在，Godot 才认这个目录是工程。
-3. 不要提交 `.godot/`（你的 `.gitignore` 已经覆盖）。
+## 现在能玩到什么
 
-## 二、用 Godot 打开
+- 一张**程序化生成的肺地图**（左右两叶 + 中间支气管），肺泡连通、腔室有纵深
+- 三种病毒粒子：圆盘（圆周扩散）/ 带状（沿轴扩散）/ 跳跃链（单点跳跃、无视阻隔带）
+- 手段：左键射流（扇形、被墙与阻隔带截断）、右键阻隔带（闪烁生效、拦人也拦弹道）、空格引信（内圈清场、外圈吸链）、贴身净化场
+- 尸体留疤 30 秒 → 自动拾取 → 养分 → 兑换手段
+- 相机跟随、战术小地图、可开关的装饰层
 
-1. Godot 4.7 启动 → Import → 选 `E:\gamecreation\project.godot` → Import & Edit。
-2. 首次打开会导入 `icon.svg`、编译脚本，几秒钟。
-3. 按 **F5** 直接跑（主场景已设为 `res://scenes/main.tscn`）。
+## 文档
 
-## 三、操作
-
-| 键 | 作用 |
+| 文档 | 内容 |
 |---|---|
-| WASD / 方向键 | 移动免疫单元（速度 320 u/s） |
-| 按住 鼠标左键 / 空格 | 净化（半径 250，咬住边界才消耗酶） |
-| `[` `]` | 变速 0.25× / 0.5× / 1× / 2× / 4× |
-| P | 暂停 |
-| N | 暂停时单步一帧（1/60 s） |
-| R | 重播种，回到开局状态（同 seed 必得同一局面） |
-| TAB / F1 | 显示/隐藏 HUD |
+| [docs/系统设计书.md](docs/系统设计书.md) | **设计基准**：定位 / 核心循环 / 架构分层 / 模块契约 / 扩展接口 / 数值 / 验收 / 多 Agent 协作规范 |
+| [docs/任务看板.md](docs/任务看板.md) | 做到了哪、下一步做什么、谁接、任务卡模板 |
+| [docs/地图与装饰层.md](docs/地图与装饰层.md) | 地图生成链路、装饰层结构、接美术的四个落点 |
+| [docs/病毒模型与攻击机制.md](docs/病毒模型与攻击机制.md) | 三形态扩散规则、尸体/阻隔带/引信、性能预算与实测 |
 
-## 四、目录
+## 跑起来
 
-```
-project.godot            工程配置：1600x1000 视口、4 个 Autoload、60 tick、gl_compatibility
-scenes/main.tscn         只有一个 Node2D + 挂 main.gd（其余节点全部代码创建）
-scripts/main.gd          主循环：固定 tick 累加器、输入、时间缩放、竞技场绘制
-scripts/core/game_state.gd   G / 血氧 / 毒素 / 意识 / 酶 + 器官三态（i, p, d）
-scripts/core/rng_service.gd  三条独立随机流（spread / drop / events），种子化
-scripts/core/event_bus.gd    13 个全局信号，与总纲 §16.2 的契约一致
-scripts/core/config.gd       读 data/*.json，加内容不改代码
-scripts/world/spread_system.gd  扩散场：球状增长 + 净化推边 + 抖动边界绘制
-scripts/units/player_unit.gd    免疫单元：直径 90、净化半径 250
-scripts/ui/hud.gd             HUD（全 ASCII，规避默认字体缺中文）
-data/*.json                  器官 / 病毒 / 部队 / 经济 / 注射点 的数值表
+```powershell
+$exe = 'E:\Godot\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe'
+& $exe --path E:\gamecreation 'res://scenes/main.tscn'
 ```
 
-## 五、已实现 / 未实现
+操作：`WASD` 移动 · 左键射流 · 右键阻隔带(30) · 空格引信(40) · `R` 换一张肺 · `F` 装饰层
 
-已实现：
-- 固定 60 tick 逻辑 + 时间缩放 + 暂停单步（保证可复现）
-- 球状扩散场：半径每秒 +3，边界带抖动
-- 净化推边：距离越近效率越高，仅在咬住时扣酶
-- 器官三态 → G 加权计算（含 I>60% 权重翻倍、坏死不计入）
-- 血氧 / 毒素 / 意识三条派生条随器官状态联动
-- 种子化 RNG：同 seed 同局面
+## 验收
 
-未实现（M1 待做，按总纲的任务卡拆）：
-- 带状 / 辐射 / 随机三种扩散形状
-- 阻断带、器官隔离、缺血债、坏死
-- 多部队与血管调度、瞬移接管
-- 反扑期、阶段目标、养分商店
-- 存档与双人分屏
+```powershell
+# 地图自测（34 项）
+& $exe --headless --path E:\gamecreation 'res://scenes/debug/map_selftest.tscn'
+# 实拍四张（射流 / 铺带挡弹道 / 引信 / 小地图）
+& $exe --path E:\gamecreation 'res://scenes/main.tscn' -- --shot
+# 俯瞰 / 压测 / 贴墙滑行
+& $exe --path E:\gamecreation 'res://scenes/main.tscn' -- --overview
+& $exe --path E:\gamecreation 'res://scenes/main.tscn' -- --stress
+& $exe --path E:\gamecreation 'res://scenes/main.tscn' -- --walk
+```
 
-## 六、调试约定
+判定口径与实测基线见系统设计书 §9。
 
-- 逻辑一律走 `_simulate(STEP)`，`STEP = 1/60`；`Engine.time_scale` 不参与逻辑，避免物理帧漂移。
-- 复现一个 bug：记下 HUD 里的 `SEED` + `TICK`，用 R 重播种、`[` 降速、N 单步贴近现场。
-- 新增内容优先写进 `data/*.json`，代码只读表。
+## 仓库约定
 
-## 七、常见问题
+- 数值**只**改 `scripts/core/balance.gd`
+- 依赖方向单向：`main → world → units → ui`，`balance` 谁都能读、它不依赖任何人
+- 没有 autoload，跨模块一律显式 `bind(...)` 注入
+- 二进制资源走 Git LFS（`.gitattributes` 已配置）
 
-- 打开报 "没有 project.godot"：解压层级多了一层，把内层内容提上来。
-- 画面糊/字体方块：HUD 是英文，属预期；中文留给正式 UI 字体阶段处理。
-- 显卡很老导致启动报 Forward+ 相关错误：本项目已设 `gl_compatibility`，一般不会碰到。
+## 历史
+
+`M1 灰盒`（圆环膨胀病毒 + 固定场地 + 数据驱动表）已被 `M2 粒子病毒` 取代并从代码库移除，
+代码保留在 git 历史里；当时的设计数据留在 `docs/spec/data/`。

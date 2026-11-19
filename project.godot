@@ -14,12 +14,8 @@ config/name="Purge Protocol Greybox"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 
-[autoload]
-
-GameState="*res://scripts/core/game_state.gd"
-RNG="*res://scripts/core/rng_service.gd"
-EventBus="*res://scripts/core/event_bus.gd"
-Config="*res://scripts/core/config.gd"
+; 无全局 autoload：模块之间用显式 bind(...) 注入依赖，
+; 这样任何一层都能单独跑（自测、压测、单场景演示），不会出现隐式全局状态。
 
 [display]
 

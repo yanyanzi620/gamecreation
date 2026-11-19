@@ -1,6 +1,0 @@
-[gd_scene format=3 uid="uid://cfgioj1mmdaho"]
-
-[ext_resource type="Script" uid="uid://bhcc0ltbn5rqx" path="res://scripts/demo/virus_showcase.gd" id="1_show"]
-
-[node name="VirusShowcase" type="Node2D" unique_id=1899727249]
-script = ExtResource("1_show")
