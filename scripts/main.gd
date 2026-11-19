@@ -107,7 +107,7 @@ func _build() -> void:
 	cam = Camera2D.new()
 	cam.name = "Cam"
 	# 一屏刚好装下一整叶（约 90%）：看得见自己要守的那半区，看不见对面 —— 逼着走气管
-	cam.zoom = Vector2(0.58, 0.58)
+	cam.zoom = Vector2(Balance.CAM_ZOOM, Balance.CAM_ZOOM)
 	cam.position_smoothing_enabled = true
 	cam.position_smoothing_speed = 9.0
 	add_child(cam)
