@@ -2,11 +2,11 @@ extends Node2D
 # 射流：左键点一次 = 一发扇形清除（固定长度 / 固定角度 / 冷却）
 # 单次扳机：按住不放不会连发；只有冷却归零后新的按下才生效。
 
-const LENGTH := 320.0
-const HALF_ANGLE_DEG := 16.0
-const COOLDOWN := 0.50
-const VIS_SEC := 0.30
-const ARC_STEPS := 18
+const LENGTH := Balance.JET_LENGTH
+const HALF_ANGLE_DEG := Balance.JET_HALF_ANGLE_DEG
+const COOLDOWN := Balance.JET_COOLDOWN
+const VIS_SEC := Balance.JET_VIS_SEC
+const ARC_STEPS := Balance.JET_ARC_STEPS
 
 var cooldown_left := 0.0
 var _flash := 0.0

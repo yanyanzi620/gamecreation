@@ -17,13 +17,13 @@ const KIND_BAND := 1
 const KIND_CHAIN := 2
 
 const STEP := 1.0 / 60.0
-const SPEED := 320.0
-const PLAYER_R := 22.0
-const BLK_CD := 0.20
-const BLK_COST := 30
-const FUSE_COST := 40
-const FUSE_CD := 5.0
-const FUSE_OFFSET := 180.0
+const SPEED := Balance.PLAYER_SPEED
+const PLAYER_R := Balance.PLAYER_R
+const BLK_CD := Balance.BLOCK_COOLDOWN
+const BLK_COST := Balance.BLOCK_COST
+const FUSE_COST := Balance.FUSE_COST
+const FUSE_CD := Balance.FUSE_COOLDOWN
+const FUSE_OFFSET := Balance.FUSE_OFFSET
 
 var player := Vector2(900.0, 450.0)
 var mouse := Vector2(1120.0, 300.0)

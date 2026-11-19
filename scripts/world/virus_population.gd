@@ -32,61 +32,61 @@ const KIND_CHAIN := 2
 const KIND_COUNT := 3
 
 # 每格容量：圆盘最密，条带中等，链最瘦
-const CAP_BLOB := 10
-const CAP_BAND := 6
-const CAP_CHAIN := 2
+const CAP_BLOB := Balance.BLOB_CAP
+const CAP_BAND := Balance.BAND_CAP
+const CAP_CHAIN := Balance.CHAIN_CAP
 
 # ------------------------------------------------------------ 池
-const MAX_LIVE := 6000
-const MAX_CORPSE := 1800
+const MAX_LIVE := Balance.VIRUS_MAX_LIVE
+const MAX_CORPSE := Balance.VIRUS_MAX_CORPSE
 const TOTAL := MAX_LIVE + MAX_CORPSE
 
 # ------------------------------------------------------------ 空间
-const CELL := 30.0
-const GRID_W := 54          # 1600 / 30
-const GRID_H := 34          # 1000 / 30
-const ARENA_W := 1600.0
-const ARENA_H := 1000.0
-const ARENA_PAD := 30.0
+const CELL := Balance.CELL
+const GRID_W := Balance.GRID_W
+const GRID_H := Balance.GRID_H
+const ARENA_W := Balance.ARENA_W
+const ARENA_H := Balance.ARENA_H
+const ARENA_PAD := Balance.ARENA_PAD
 
 # ------------------------------------------------------------ 生长
-const R_MIN := 4.5
-const R_MAX := 8.0
-const COOL_MIN := 1.40
-const COOL_MAX := 2.50
-const SPAWN_D_MIN := 14.0
-const SPAWN_D_MAX := 26.0
-const PROBE_DIST := 30.0        # 探一格
+const R_MIN := Balance.VIRUS_R_MIN
+const R_MAX := Balance.VIRUS_R_MAX
+const COOL_MIN := Balance.VIRUS_COOL_MIN
+const COOL_MAX := Balance.VIRUS_COOL_MAX
+const SPAWN_D_MIN := Balance.BLOB_SPAWN_D_MIN
+const SPAWN_D_MAX := Balance.BLOB_SPAWN_D_MAX
+const PROBE_DIST := Balance.VIRUS_PROBE_DIST
 
 # 跳跃链 = 单点传播：不粘连、不稳方向，只保证「整体往前推」
 # 每次繁殖在空中随机落一个点，点与点之间天然留空，视觉上不会糊成条带
-const CHAIN_SPREAD_DEG := 38.0   # 落点相对主轴的最大偏角
-const CHAIN_STEP_MIN := 70.0     # 落点距离
-const CHAIN_STEP_MAX := 150.0
+const CHAIN_SPREAD_DEG := Balance.CHAIN_SPREAD_DEG
+const CHAIN_STEP_MIN := Balance.CHAIN_STEP_MIN
+const CHAIN_STEP_MAX := Balance.CHAIN_STEP_MAX
 
 # ------------------------------------------------------------ 阻隔带
-const BLK_ARM := 0.45           # 释放后闪烁多久才生效
-const BLK_LIFE := 30.0          # 生效后存活多久（自溶）
-const BLK_LEN := 260.0          # 固定长度
-const BLK_OFFSET := 140.0       # 从单元朝向前方多远处落下
-const BLK_SLACK := 12.0         # 端点容差
+const BLK_ARM := Balance.BLOCK_ARM
+const BLK_LIFE := Balance.BLOCK_LIFE
+const BLK_LEN := Balance.BLOCK_LEN
+const BLK_OFFSET := Balance.BLOCK_OFFSET
+const BLK_SLACK := Balance.BLOCK_SLACK
 const BLK_STATE_ARM := 0
 const BLK_STATE_ON := 1
 
 # ------------------------------------------------------------ 引信
 # 空格放一个引信：小圈里的圆盘/带状直接消融，
 # 大圈里的跳跃链被逐帧拽向小圈，进圈即灭。
-const FUSE_KILL := 85.0        # 小范围：圆盘 / 带状直接消融
-const FUSE_PULL := 220.0       # 更大的范围：只对跳跃链生效，往中心拽
-const FUSE_SPEED := 250.0      # 被拽的速度 px/s
-const FUSE_LIFE := 3.0         # 引信维持多久
-const MAX_FUSE := 3
-const AXIS_WANDER := 0.07       # 每次繁殖让主轴折一次的概率
-const WANDER_DEG_BAND := 20.0
+const FUSE_KILL := Balance.FUSE_KILL
+const FUSE_PULL := Balance.FUSE_PULL
+const FUSE_SPEED := Balance.FUSE_SPEED
+const FUSE_LIFE := Balance.FUSE_LIFE
+const MAX_FUSE := Balance.FUSE_MAX
+const AXIS_WANDER := Balance.BAND_AXIS_WANDER
+const WANDER_DEG_BAND := Balance.BAND_WANDER_DEG
 
 const YOUNG_SEC := 2.0
 const DRIFT_SPEED := 24.0
-const CORPSE_LIFE := 30.0
+const CORPSE_LIFE := Balance.CORPSE_LIFE
 
 # ------------------------------------------------------------ 颜色
 const COL_BLOB := Color(0.30, 0.86, 0.46, 0.90)
@@ -328,12 +328,12 @@ func _dir_weight(kind: int, axis: float, ang: float) -> float:
 	var diff := absf(d)
 	if kind == KIND_BAND:
 		if diff <= PI * 0.13:
-			return 6.5          # 正前方：强推
+			return Balance.BAND_W_FRONT      # 正前方：强推
 		if diff <= PI * 0.26:
-			return 1.2          # ±45°：慢扩，形成连续带宽
+			return Balance.BAND_W_45         # ±45°：慢扩，形成连续带宽
 		if diff <= PI * 0.50:
-			return 0.5          # 侧向
-		return 0.30             # 反方向：只用于回填
+			return Balance.BAND_W_SIDE       # 侧向
+		return Balance.BAND_W_BACK           # 反方向：只用于回填
 
 	return 1.0                  # BLOB：各向同性
 
@@ -439,6 +439,9 @@ func _do_spawn(i: int, bx: float, by: float, kind: int, cap: int) -> void:
 	var nd := Vector2(bx, by).rotated(jitter)
 	var smin := SPAWN_D_MIN
 	var smax := SPAWN_D_MAX
+	if kind == KIND_BAND:
+		smin = Balance.BAND_SPAWN_D_MIN
+		smax = Balance.BAND_SPAWN_D_MAX
 	var dist := _rng.randf_range(smin, smax)
 	var nx := _px[i] + nd.x * dist
 	var ny := _py[i] + nd.y * dist
@@ -531,7 +534,7 @@ func take_corpse_near(center: Vector2, radius: float, max_n: int) -> Array:
 			break
 		if _alive[i] == 0 or _ptype[i] != 1:
 			continue
-		if _plife[i] > CORPSE_LIFE - 1.0:
+		if _plife[i] > CORPSE_LIFE - Balance.CORPSE_PICK_DELAY:
 			continue
 		var vx := _px[i] - center.x
 		var vy := _py[i] - center.y
@@ -553,7 +556,7 @@ func harvest_circle(center: Vector2, radius: float, max_n: int) -> int:
 			break
 		if _alive[i] == 0 or _ptype[i] != 1:
 			continue
-		if _plife[i] > CORPSE_LIFE - 1.0:
+		if _plife[i] > CORPSE_LIFE - Balance.CORPSE_PICK_DELAY:
 			continue
 		var vx := _px[i] - center.x
 		var vy := _py[i] - center.y

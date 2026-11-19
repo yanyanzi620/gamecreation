@@ -8,12 +8,12 @@ extends Node2D
 #
 # 养分是硬资源：阻隔带要花 30 才放得出来。
 
-const PURGE_RADIUS := 108.0
-const PURGE_PER_SEC := 55.0
-const PICKUP_RADIUS := 200.0
-const PICKUP_PER_SEC := 45.0
-const MOTE_SPEED := 460.0
-const MOTE_MAX := 80
+const PURGE_RADIUS := Balance.PURGE_RADIUS
+const PURGE_PER_SEC := Balance.PURGE_PER_SEC
+const PICKUP_RADIUS := Balance.PICKUP_RADIUS
+const PICKUP_PER_SEC := Balance.PICKUP_PER_SEC
+const MOTE_SPEED := Balance.MOTE_SPEED
+const MOTE_MAX := Balance.MOTE_MAX
 
 var nutrient := 0
 var last_purge := 0
@@ -69,7 +69,7 @@ func tick(dt: float, center: Vector2) -> void:
 		var d := center - p
 		var l := d.length()
 		if l < 16.0:
-			nutrient += 1
+			nutrient += Balance.NUTRIENT_PER_CORPSE
 			continue
 		keep.append(p + d / l * MOTE_SPEED * dt)
 	_motes = keep
