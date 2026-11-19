@@ -56,10 +56,21 @@ const COOL_MIN := 1.00
 const COOL_MAX := 2.00
 const SPAWN_D_MIN := 16.0
 const SPAWN_D_MAX := 30.0
+const STEP_MIN_CHAIN := 32.0     # 链的步长：粒子之间留出可见的空档
+const STEP_MAX_CHAIN := 52.0
 const PROBE_DIST := 30.0        # 探一格
-const JUMP_DIST := 78.0         # 跳跃链的跳跃距离（约 2.6 格）
-const JUMP_CHANCE := 0.55       # 前进方向被堵死时，尝试跳跃的概率
-const AXIS_WANDER := 0.12       # 每次繁殖让主轴折一次的概率
+const JUMP_DIST := 112.0         # 跳跃链的跳跃距离（约 2.6 格）
+const JUMP_CHANCE := 0.85       # 前进方向被堵死时，尝试跳跃的概率
+
+# ------------------------------------------------------------ 阻隔带
+const BLK_ARM := 0.45           # 释放后闪烁多久才生效
+const BLK_LIFE := 30.0          # 生效后存活多久（自溶）
+const BLK_LEN := 260.0          # 固定长度
+const BLK_OFFSET := 140.0       # 从单元朝向前方多远处落下
+const BLK_SLACK := 12.0         # 端点容差
+const BLK_STATE_ARM := 0
+const BLK_STATE_ON := 1
+const AXIS_WANDER := 0.07       # 每次繁殖让主轴折一次的概率
 const WANDER_DEG_BAND := 20.0
 const WANDER_DEG_CHAIN := 8.0
 const WANDER_CHANCE_CHAIN := 0.12
@@ -100,6 +111,7 @@ var _rng := RandomNumberGenerator.new()
 var _mmi: MultiMeshInstance2D
 var _buf := PackedFloat32Array()
 var _dirty := true
+var _blk: Array = []
 
 
 func _ready() -> void:
@@ -143,6 +155,7 @@ func _init_multimesh() -> void:
 	mm.visible_instance_count = TOTAL
 
 	_mmi = MultiMeshInstance2D.new()
+	_mmi.z_index = -1
 	_mmi.multimesh = mm
 	_mmi.texture = _make_dot_texture()
 	add_child(_mmi)
@@ -327,24 +340,25 @@ func _dir_weight(kind: int, axis: float, ang: float) -> float:
 	var diff := absf(d)
 	if kind == KIND_BAND:
 		if diff <= PI * 0.13:
-			return 5.0          # 正前方：强推
+			return 6.5          # 正前方：强推
 		if diff <= PI * 0.26:
-			return 0.7          # ±45°：慢扩，形成带宽
+			return 1.2          # ±45°：慢扩，形成连续带宽
 		if diff <= PI * 0.50:
 			return 0.5          # 侧向
 		return 0.30             # 反方向：只用于回填
 	if kind == KIND_CHAIN:
 		if diff <= PI * 0.13:
-			return 8.0          # 正前方：近乎单线
+			return 10.0         # 正前方：单线，几乎不分叉
 		if diff <= PI * 0.30:
-			return 0.30         # 极轻分叉
-		return 0.10             # 反向：只用于回填
+			return 0.10
+		return 0.04             # 反向：只用于回填
 	return 1.0                  # BLOB：各向同性
 
 
 # ============================================================ 模拟
 
 func tick(dt: float) -> void:
+	_tick_blocks(dt)
 	for i in range(TOTAL):
 		if _alive[i] == 0:
 			continue
@@ -413,6 +427,10 @@ func _pick_dir(i: int, kind: int, axis: float, cap: int, max_diff: float) -> Arr
 		var ty := _py[i] + dy * PROBE_DIST
 		if tx < ARENA_PAD or tx > ARENA_W - ARENA_PAD or ty < ARENA_PAD or ty > ARENA_H - ARENA_PAD:
 			continue
+		# 生效的阻隔带把外面封死：这个方向不可选，
+		# 于是生长会自动沿带子走向两端，形成绕射
+		if _block_cross(_px[i], _py[i], tx, ty) == 1:
+			continue
 		var c := _cell_count(tx, ty)
 		if c >= cap:
 			continue
@@ -432,7 +450,12 @@ func _pick_dir(i: int, kind: int, axis: float, cap: int, max_diff: float) -> Arr
 func _do_spawn(i: int, bx: float, by: float, kind: int, cap: int) -> void:
 	var jitter := deg_to_rad(_rng.randf_range(-12.0, 12.0))
 	var nd := Vector2(bx, by).rotated(jitter)
-	var dist := _rng.randf_range(SPAWN_D_MIN, SPAWN_D_MAX)
+	var smin := SPAWN_D_MIN
+	var smax := SPAWN_D_MAX
+	if kind == KIND_CHAIN:
+		smin = STEP_MIN_CHAIN
+		smax = STEP_MAX_CHAIN
+	var dist := _rng.randf_range(smin, smax)
 	var nx := _px[i] + nd.x * dist
 	var ny := _py[i] + nd.y * dist
 	if nx < ARENA_PAD or nx > ARENA_W - ARENA_PAD or ny < ARENA_PAD or ny > ARENA_H - ARENA_PAD:
@@ -441,6 +464,12 @@ func _do_spawn(i: int, bx: float, by: float, kind: int, cap: int) -> void:
 	if _cell_count(nx, ny) >= cap:
 		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
 		return
+	# 阻隔带：生效后不许穿过；闪烁期内穿过去只会被减速
+	var bc := _block_cross(_px[i], _py[i], nx, ny)
+	if bc == 1:
+		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
+		return
+	var cool_pen := 2.4 if bc == 2 else 1.0
 
 	var naxis := _pax[i]
 	if kind != KIND_BLOB:
@@ -450,7 +479,7 @@ func _do_spawn(i: int, bx: float, by: float, kind: int, cap: int) -> void:
 			naxis = _pax[i] + deg_to_rad(_rng.randf_range(-wd, wd))
 
 	_spawn(nx, ny, _rng.randf_range(R_MIN, R_MAX), 0, kind, naxis, _pvid[i],
-		0.0, _rng.randf_range(COOL_MIN, COOL_MAX))
+		0.0, _rng.randf_range(COOL_MIN, COOL_MAX) * cool_pen)
 	_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
 
 
@@ -468,6 +497,8 @@ func _try_jump(i: int, axis: float) -> bool:
 	if jx < ARENA_PAD or jx > ARENA_W - ARENA_PAD or jy < ARENA_PAD or jy > ARENA_H - ARENA_PAD:
 		return false
 	if _cell_count(jx, jy) >= _cell_cap(KIND_CHAIN):
+		return false
+	if _block_cross(_px[i], _py[i], jx, jy) == 1:
 		return false
 	_spawn(jx, jy, _rng.randf_range(R_MIN, R_MAX), 0, KIND_CHAIN, axis, _pvid[i],
 		0.0, _rng.randf_range(COOL_MIN, COOL_MAX))
@@ -545,6 +576,96 @@ func harvest_circle(center: Vector2, radius: float, max_n: int) -> int:
 		_kill(i)
 		got += 1
 	return got
+
+
+# ============================================================ 阻隔带
+# 规则
+#   · 只能落在单元朝前的正前方，不吸附、不拖拽
+#   · 固定长度，释放后先闪烁 BLK_ARM 秒才生效
+#   · 生效前已经穿过去的病毒 -> 只有减速（那颗之后繁殖变慢）
+#   · 生效后病毒无法穿过；带子有限长，所以病毒从两端绕过去（绕射）
+#   · 只拦病毒，不拦玩家；BLK_LIFE 秒后自溶
+#   · 与「器官隔离」是两件事：阻隔带永不断血，不会造成坏死
+
+func block_count() -> int:
+	return _blk.size()
+
+
+func place_block(origin: Vector2, dir: Vector2) -> bool:
+	var d := dir.normalized()
+	if d.length() < 0.01:
+		return false
+	var c := origin + d * BLK_OFFSET
+	var half := BLK_LEN * 0.5
+	var perp := Vector2(-d.y, d.x)
+	var a := c - perp * half
+	var b := c + perp * half
+	_blk.append({"a": a, "b": b, "n": perp, "t": 0.0, "state": BLK_STATE_ARM})
+	queue_redraw()
+	return true
+
+
+func _tick_blocks(dt: float) -> void:
+	if _blk.is_empty():
+		return
+	var keep: Array = []
+	for blk in _blk:
+		blk["t"] += dt
+		if blk["state"] == BLK_STATE_ARM and blk["t"] >= BLK_ARM:
+			blk["state"] = BLK_STATE_ON
+		if blk["t"] >= BLK_ARM + BLK_LIFE:
+			continue
+		keep.append(blk)
+	if keep.size() != _blk.size():
+		_blk = keep
+	queue_redraw()
+
+
+# 线段 (x0,y0)->(x1,y1) 与阻隔带的相交判定
+#   0 = 没穿   1 = 被生效带拦住   2 = 闪烁期内穿过（减速）
+func _block_cross(x0: float, y0: float, x1: float, y1: float) -> int:
+	if _blk.is_empty():
+		return 0
+	var p0 := Vector2(x0, y0)
+	var p1 := Vector2(x1, y1)
+	for blk in _blk:
+		var a: Vector2 = blk["a"]
+		var b: Vector2 = blk["b"]
+		var n: Vector2 = blk["n"]
+		var d0 := (p0 - a).dot(n)
+		var d1 := (p1 - a).dot(n)
+		if d0 * d1 > 0.0:
+			continue
+		if absf(d0 - d1) < 0.0001:
+			continue
+		var tt := d0 / (d0 - d1)
+		var hitp := p0.lerp(p1, tt)
+		var along := (hitp - a).dot((b - a).normalized())
+		var total := (b - a).length()
+		if along < -BLK_SLACK or along > total + BLK_SLACK:
+			continue
+		return 1 if blk["state"] == BLK_STATE_ON else 2
+	return 0
+
+
+func _draw() -> void:
+	for blk in _blk:
+		var a: Vector2 = blk["a"]
+		var b: Vector2 = blk["b"]
+		var bt: float = blk["t"]
+		var on: bool = blk["state"] == BLK_STATE_ON
+		if on:
+			var left := BLK_ARM + BLK_LIFE - bt
+			var fade := clampf(left / 5.0, 0.35, 1.0)
+			draw_line(a, b, Color(0.55, 0.95, 1.0, 0.18 * fade), 16.0)
+			draw_line(a, b, Color(0.62, 0.98, 1.0, 0.95 * fade), 3.0)
+			draw_circle(a, 5.0, Color(0.62, 0.98, 1.0, 0.95 * fade))
+			draw_circle(b, 5.0, Color(0.62, 0.98, 1.0, 0.95 * fade))
+		else:
+			# 闪烁待生效：一眼看出还没封住
+			var blink := 0.35 + 0.65 * absf(sin(bt * 26.0))
+			draw_line(a, b, Color(1.0, 0.86, 0.35, 0.90 * blink), 2.0)
+			draw_line(a, b, Color(1.0, 0.86, 0.35, 0.20 * blink), 12.0)
 
 
 # ============================================================ 渲染

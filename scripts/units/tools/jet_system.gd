@@ -4,7 +4,7 @@ extends Node2D
 
 const LENGTH := 320.0
 const HALF_ANGLE_DEG := 16.0
-const COOLDOWN := 0.90
+const COOLDOWN := 0.50
 const VIS_SEC := 0.30
 const ARC_STEPS := 18
 

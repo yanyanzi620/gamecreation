@@ -19,8 +19,9 @@ const KIND_CHAIN := 2
 const STEP := 1.0 / 60.0
 const SPEED := 320.0
 const PLAYER_R := 22.0
+const BLK_CD := 3.0
 
-var player := Vector2(980.0, 390.0)
+var player := Vector2(900.0, 450.0)
 var mouse := Vector2(1120.0, 300.0)
 
 var pop
@@ -29,6 +30,8 @@ var aura
 
 var _acc := 0.0
 var _lmb := false
+var _rmb := false
+var _blk_cd := 0.0
 var _hud: Label
 var _hud2: Label
 var _bar: ColorRect
@@ -48,7 +51,7 @@ func _ready() -> void:
 	# 圆周：半径 105，260 颗（密度略低于格容，留出生长余量）
 	pop.spawn_virus(KIND_BLOB, Vector2(1120.0, 300.0), 105.0, 0.0, 220, 0.0)
 	# 带状：半长 185 / 半宽 40，主轴 0.18 弧度
-	pop.spawn_virus(KIND_BAND, Vector2(330.0, 285.0), 185.0, 40.0, 120, 0.18)
+	pop.spawn_virus(KIND_BAND, Vector2(330.0, 210.0), 200.0, 32.0, 85, 0.08)
 	# 跳跃链：4 颗珠子，珠半径 22，间距 56，主轴 -0.45
 	pop.spawn_virus(KIND_CHAIN, Vector2(240.0, 760.0), 18.0, 70.0, 12, -0.22)
 
@@ -87,7 +90,7 @@ func _ready() -> void:
 	_hint.position = Vector2(18, 136)
 	_hint.add_theme_font_size_override("font_size", 13)
 	_hint.add_theme_color_override("font_color", Color(0.60, 0.68, 0.64))
-	_hint.text = "WASD 移动 · 左键点一次 = 一发射流 · 身边净化场持续消融"
+	_hint.text = "WASD 移动 · 左键点一次 = 一发射流(0.5s) · 右键 = 朝前放阻隔带"
 	layer.add_child(_hint)
 
 	if _shot:
@@ -95,11 +98,16 @@ func _ready() -> void:
 
 
 func _sequence() -> void:
-	await get_tree().create_timer(5.0).timeout
+	# 先立一道阻隔带，让病毒长过来被截断（并绕两端），再补两发射流
+	await get_tree().create_timer(1.20).timeout
+	_place_block(Vector2(1120.0, 300.0))
+	await get_tree().create_timer(4.00).timeout
 	_fire(Vector2(1120.0, 300.0))
-	await get_tree().create_timer(0.30).timeout
+	await get_tree().create_timer(0.50).timeout
+	_fire(Vector2(1120.0, 300.0))
+	await get_tree().create_timer(0.35).timeout
 	_save("res://shot_a.png")
-	await get_tree().create_timer(4.50).timeout
+	await get_tree().create_timer(4.20).timeout
 	_save("res://shot_b.png")
 	get_tree().quit()
 
@@ -109,6 +117,13 @@ func _save(path: String) -> void:
 	var p := ProjectSettings.globalize_path(path)
 	img.save_png(p)
 	print("[SHOT] ", p)
+
+
+func _place_block(target: Vector2) -> bool:
+	var d := target - player
+	if d.length() < 1.0:
+		d = Vector2.RIGHT
+	return pop.place_block(player, d)
 
 
 func _fire(target: Vector2) -> int:
@@ -133,12 +148,24 @@ func _process(delta: float) -> void:
 
 	mouse = get_global_mouse_position()
 
+	if _blk_cd > 0.0:
+		_blk_cd = maxf(0.0, _blk_cd - delta)
+
 	if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 		if not _lmb:
 			_lmb = true
 			_fire(mouse)
 	else:
 		_lmb = false
+
+	if Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
+		if not _rmb:
+			_rmb = true
+			if _blk_cd <= 0.0:
+				_place_block(mouse)
+				_blk_cd = BLK_CD
+	else:
+		_rmb = false
 
 	_acc += delta
 	var guard := 0
@@ -161,7 +188,9 @@ func _process(delta: float) -> void:
 		pop.live_by_kind(KIND_CHAIN),
 		pop.corpse_count(), float(_tick_us) / 1000.0, int(ratio * 100.0)
 	]
-	_hud2.text = "养分 %d   射流命中 %d   净化 %d/帧" % [aura.nutrient, jet.last_hit(), aura.last_purge]
+	_hud2.text = "养分 %d   射流命中 %d   阻隔带 %d   清带冷却 %.1fs" % [
+		aura.nutrient, jet.last_hit(), pop.block_count(), _blk_cd
+	]
 	queue_redraw()
 
 
