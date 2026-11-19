@@ -555,6 +555,28 @@ func purge_circle(center: Vector2, radius: float, max_n: int) -> int:
 	return hit
 
 
+# 自动拾取用：吃掉范围内躺够 1 秒的尸体，返回它们的位置（供光点飞行用）
+func take_corpse_near(center: Vector2, radius: float, max_n: int) -> Array:
+	var out: Array = []
+	if max_n <= 0:
+		return out
+	var r2 := radius * radius
+	for i in range(TOTAL):
+		if out.size() >= max_n:
+			break
+		if _alive[i] == 0 or _ptype[i] != 1:
+			continue
+		if _plife[i] > CORPSE_LIFE - 1.0:
+			continue
+		var vx := _px[i] - center.x
+		var vy := _py[i] - center.y
+		if vx * vx + vy * vy > r2:
+			continue
+		out.append(Vector2(_px[i], _py[i]))
+		_kill(i)
+	return out
+
+
 # 巨噬细胞回收：吃掉吸附范围内的尸体，换养分
 # 只收割「已经躺了 1 秒以上」的尸体，保证战场还能看到疤
 func harvest_circle(center: Vector2, radius: float, max_n: int) -> int:

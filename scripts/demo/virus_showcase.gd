@@ -20,6 +20,7 @@ const STEP := 1.0 / 60.0
 const SPEED := 320.0
 const PLAYER_R := 22.0
 const BLK_CD := 3.0
+const BLK_COST := 30
 
 var player := Vector2(900.0, 450.0)
 var mouse := Vector2(1120.0, 300.0)
@@ -38,6 +39,8 @@ var _bar: ColorRect
 var _hint: Label
 var _shot := false
 var _tick_us := 0
+var _sim := 0.0
+var _frames := 0
 
 
 func _ready() -> void:
@@ -64,6 +67,7 @@ func _ready() -> void:
 	aura.name = "Aura"
 	add_child(aura)
 	aura.bind(pop)
+	aura.nutrient = 60          # 演示用初始养分，够放两道带
 
 	var layer := CanvasLayer.new()
 	add_child(layer)
@@ -90,7 +94,7 @@ func _ready() -> void:
 	_hint.position = Vector2(18, 136)
 	_hint.add_theme_font_size_override("font_size", 13)
 	_hint.add_theme_color_override("font_color", Color(0.60, 0.68, 0.64))
-	_hint.text = "WASD 移动 · 左键点一次 = 一发射流(0.5s) · 右键 = 朝前放阻隔带"
+	_hint.text = "WASD 移动 · 左键 = 射流(0.5s) · 右键 = 阻隔带（消耗 30 养分，尸体自动飞回）"
 	layer.add_child(_hint)
 
 	if _shot:
@@ -98,14 +102,14 @@ func _ready() -> void:
 
 
 func _sequence() -> void:
-	# 先立一道阻隔带，让病毒长过来被截断（并绕两端），再补两发射流
+	# 1.2s 立阻隔带 -> 2.0s 后病毒被顶住但还在射程内 -> 3.0s 两发射流打穿
 	await get_tree().create_timer(1.20).timeout
 	_place_block(Vector2(1120.0, 300.0))
-	await get_tree().create_timer(4.00).timeout
+	await get_tree().create_timer(1.80).timeout
 	_fire(Vector2(1120.0, 300.0))
-	await get_tree().create_timer(0.50).timeout
+	await get_tree().create_timer(0.55).timeout
 	_fire(Vector2(1120.0, 300.0))
-	await get_tree().create_timer(0.35).timeout
+	await get_tree().create_timer(0.85).timeout
 	_save("res://shot_a.png")
 	await get_tree().create_timer(4.20).timeout
 	_save("res://shot_b.png")
@@ -117,12 +121,18 @@ func _save(path: String) -> void:
 	var p := ProjectSettings.globalize_path(path)
 	img.save_png(p)
 	print("[SHOT] ", p)
+	print("[STAT] sim=%.2f frames=%d live=%d corpse=%d nut=%d hit=%d" % [
+		_sim, _frames, pop.live_count(), pop.corpse_count(), aura.nutrient, jet.last_hit()
+	])
 
 
 func _place_block(target: Vector2) -> bool:
+	if aura.nutrient < BLK_COST:
+		return false
 	var d := target - player
 	if d.length() < 1.0:
 		d = Vector2.RIGHT
+	aura.nutrient -= BLK_COST
 	return pop.place_block(player, d)
 
 
@@ -134,6 +144,7 @@ func _fire(target: Vector2) -> int:
 
 
 func _process(delta: float) -> void:
+	_frames += 1
 	var mv := Vector2.ZERO
 	if Input.is_key_pressed(KEY_A):
 		mv.x -= 1.0
@@ -176,8 +187,9 @@ func _process(delta: float) -> void:
 		pop.tick(STEP)
 		jet.tick(STEP)
 		aura.tick(STEP, player)
+		_sim += STEP
 		_tick_us = Time.get_ticks_usec() - t0
-
+	
 	var ratio: float = jet.ready_ratio()
 	_bar.size = Vector2(240.0 * ratio, 8.0)
 	_bar.color = Color(0.35, 0.92, 0.62) if ratio >= 1.0 else Color(0.85, 0.55, 0.20)
@@ -188,8 +200,8 @@ func _process(delta: float) -> void:
 		pop.live_by_kind(KIND_CHAIN),
 		pop.corpse_count(), float(_tick_us) / 1000.0, int(ratio * 100.0)
 	]
-	_hud2.text = "养分 %d   射流命中 %d   阻隔带 %d   清带冷却 %.1fs" % [
-		aura.nutrient, jet.last_hit(), pop.block_count(), _blk_cd
+	_hud2.text = "养分 %d   射流命中 %d   阻隔带 %d(耗 %d)   下道冷却 %.1fs" % [
+		aura.nutrient, jet.last_hit(), pop.block_count(), BLK_COST, _blk_cd
 	]
 	queue_redraw()
 
