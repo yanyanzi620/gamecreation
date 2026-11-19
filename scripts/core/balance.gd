@@ -17,12 +17,12 @@ class_name Balance
 
 # ------------------------------------------------------------ 场地
 # 场地放大到 3040x1320：屏幕只看到局部，靠相机跟随（左右两叶 + 中间纵隔）
-const ARENA_W := 3040.0
-const ARENA_H := 1320.0
+const ARENA_W := 4300.0
+const ARENA_H := 1260.0
 const ARENA_PAD := 30.0        # 病毒不许长到离边这么近的区域
 const CELL := 30.0             # 粗格边长；只影响密度判定，不影响手感
-const GRID_W := 102            # = ceil(ARENA_W / CELL)
-const GRID_H := 44             # = ceil(ARENA_H / CELL)
+const GRID_W := 144            # = ceil(ARENA_W / CELL)
+const GRID_H := 42             # = ceil(ARENA_H / CELL)
 
 
 # ============================================================ 病毒 · 通用
@@ -36,8 +36,8 @@ const VIRUS_COOL_MIN := 1.40
 const VIRUS_COOL_MAX := 2.50
 
 const VIRUS_PROBE_DIST := 30.0 # 探路距离，习惯上等于 CELL
-const VIRUS_R_MIN := 4.5       # 粒子视觉半径下限
-const VIRUS_R_MAX := 8.0       # 粒子视觉半径上限；只影响观感，不影响碰撞
+const VIRUS_R_MIN := 6.0       # 粒子视觉半径下限
+const VIRUS_R_MAX := 10.0      # 粒子视觉半径上限；只影响观感，不影响碰撞
 
 
 # ============================================================ 病毒 · 圆周 BLOB
@@ -76,12 +76,12 @@ const CORPSE_PICK_DELAY := 1.0  # 躺多久之后才可被拾取（保证玩家�
 
 
 # ============================================================ 玩家
-const PLAYER_SPEED := 320.0
-const PLAYER_R := 22.0          # 单元视觉半径；目前碰撞按中心点算
+const PLAYER_SPEED := 420.0
+const PLAYER_R := 30.0          # 单元视觉半径；碰撞按 0.72R 的偏移线算
 
 
 # ============================================================ 手段 · 射流
-const JET_LENGTH := 320.0        # 射程；调大 = 一次性清得更深
+const JET_LENGTH := 430.0        # 射程；调大 = 一次性清得更深
 const JET_HALF_ANGLE_DEG := 16.0 # 半角；调大 = 扇形更宽、更容易扫到
 const JET_COOLDOWN := 0.50       # 两发之间最短间隔
 const JET_VIS_SEC := 0.30        # 弹道残影停留时间（纯表现）
@@ -89,20 +89,20 @@ const JET_ARC_STEPS := 18        # 扇形绘制细分（纯表现）
 
 
 # ============================================================ 手段 · 净化场（贴身自动）
-const PURGE_RADIUS := 108.0      # 站在病毒里也不至于瞬间被淹
+const PURGE_RADIUS := 145.0      # 站在病毒里也不至于瞬间被淹
 const PURGE_PER_SEC := 55.0      # 每秒消融几颗
 
 
 # ============================================================ 手段 · 养分拾取（自动）
-const PICKUP_RADIUS := 200.0     # 比射程小 -> 远端战果收不回来，必须往前走
+const PICKUP_RADIUS := 270.0     # 比射程小 -> 远端战果收不回来，必须往前走
 const PICKUP_PER_SEC := 45.0     # 每秒最多收几颗尸体
 const MOTE_SPEED := 460.0        # 光点飞回速度（纯表现）
 const MOTE_MAX := 80             # 同时在场光点上限；满了就先不吃，不会丢养分
 
 
 # ============================================================ 手段 · 阻隔带
-const BLOCK_LEN := 260.0         # 固定长度；调大 = 更容易整条封死
-const BLOCK_OFFSET := 140.0      # 落在单元正前方多远
+const BLOCK_LEN := 350.0         # 固定长度；调大 = 更容易整条封死
+const BLOCK_OFFSET := 190.0      # 落在单元正前方多远
 const BLOCK_ARM := 0.45          # 闪烁多久才生效（生效前只减速、不拦人）
 const BLOCK_LIFE := 30.0         # 生效后存活多久，到点自溶
 const BLOCK_SLACK := 12.0        # 端点容差
@@ -110,11 +110,11 @@ const BLOCK_COOLDOWN := 0.20     # 只防手滑双击，真正的限制是养分
 
 
 # ============================================================ 手段 · 引信
-const FUSE_KILL := 85.0          # 内圈：圆盘/带状/链，进圈即消融
-const FUSE_PULL := 220.0         # 外圈：只对跳跃链生效的引力范围
+const FUSE_KILL := 115.0         # 内圈：圆盘/带状/链，进圈即消融
+const FUSE_PULL := 300.0         # 外圈：只对跳跃链生效的引力范围
 const FUSE_SPEED := 250.0        # 链被拽的速度；调大 = 吸得更快更狠
 const FUSE_LIFE := 3.0           # 引信维持多久
-const FUSE_OFFSET := 180.0       # 落在单元正前方多远
+const FUSE_OFFSET := 240.0       # 落在单元正前方多远
 const FUSE_MAX := 3              # 同时最多几枚
 
 

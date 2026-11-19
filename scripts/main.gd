@@ -103,7 +103,8 @@ func _build() -> void:
 	# 相机：地图比屏幕大得多，镜头跟着免疫单元走
 	cam = Camera2D.new()
 	cam.name = "Cam"
-	cam.zoom = Vector2(0.72, 0.72)      # 一屏约能看到叶子的三分之一，肺形才看得出来
+	# 一屏刚好装下一整叶（约 90%）：看得见自己要守的那半区，看不见对面 —— 逼着走气管
+	cam.zoom = Vector2(0.85, 0.85)
 	cam.position_smoothing_enabled = true
 	cam.position_smoothing_speed = 9.0
 	add_child(cam)
@@ -211,7 +212,7 @@ func _reseed(roll_map: bool) -> void:
 func _pick_start() -> Vector2:
 	var mid_x: float = _map.size.x * 0.5
 	# 左肺门：主支气管刚插进左叶的位置（和 LungGen 的 hilar 对齐）
-	var p: Vector2 = _map.nearest_free(Vector2(mid_x - 246.0, _map.size.y * 0.315), 320.0)
+	var p: Vector2 = _map.nearest_free(Vector2(mid_x - 330.0, _map.size.y * 0.330), 380.0)
 	if p.x < 0.0:
 		p = _pick_near_center()
 	return p
@@ -248,10 +249,10 @@ func _spawn_wave() -> void:
 		var fallback: Vector2 = _map.size * 0.5 + Vector2(float(_spawn_pts.size()) * 120.0, 0.0)
 		_spawn_pts.append(fallback)
 
-	# 场地面积约是原来的 2.5 倍，播种量同比放大，密度手感才接近
-	pop.spawn_virus(KIND_BLOB, _spawn_pts[0], 88.0, 0.0, 380, _rng.randf() * TAU)
-	pop.spawn_virus(KIND_BAND, _spawn_pts[1], 165.0, 26.0, 120, _rng.randf() * TAU)
-	pop.spawn_virus(KIND_CHAIN, _spawn_pts[2], 22.0, 0.0, 14, _rng.randf() * TAU)
+	# 场地面积从 4.0M 涨到 5.4M，播种量按面积再补一次
+	pop.spawn_virus(KIND_BLOB, _spawn_pts[0], 115.0, 0.0, 520, _rng.randf() * TAU)
+	pop.spawn_virus(KIND_BAND, _spawn_pts[1], 210.0, 34.0, 165, _rng.randf() * TAU)
+	pop.spawn_virus(KIND_CHAIN, _spawn_pts[2], 28.0, 0.0, 20, _rng.randf() * TAU)
 
 
 # ============================================================ 输入
@@ -438,14 +439,14 @@ func _shot_sequence() -> void:
 	var demo := player
 	if _spawn_pts.size() >= 1:
 		var target: Vector2 = _spawn_pts[0]
-		var behind: Vector2 = _map.nearest_free(target + Vector2(-235.0, 60.0), 200.0)
+		var behind: Vector2 = _map.nearest_free(target + Vector2(-300.0, 80.0), 260.0)
 		if behind.x > 0.0:
 			player = behind
 			cam.position = player
 			cam.reset_smoothing()
 			aim = (target - player).normalized()
 	# 相机跟随之后，固定坐标的老病毒团可能已经在射程外 —— 正前方补一团做验收
-	demo = player + aim * 250.0
+	demo = player + aim * 330.0
 	if not _map.solid_point(demo):
 		pop.spawn_virus(KIND_BLOB, demo, 66.0, 0.0, 110, 0.0)
 	await get_tree().create_timer(0.60).timeout
@@ -457,7 +458,7 @@ func _shot_sequence() -> void:
 	await get_tree().create_timer(0.85).timeout
 	_save("res://main_shot_a.png")
 	# 引信丢到正前方那团病毒里（能吸链、能清盘/带）
-	var fuse_spot: Vector2 = player + aim * 180.0
+	var fuse_spot: Vector2 = player + aim * 240.0
 	if _map.solid_point(fuse_spot):
 		fuse_spot = _map.nearest_free(fuse_spot, 60.0)
 	if fuse_spot.x > 0.0:
