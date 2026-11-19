@@ -29,22 +29,23 @@ class_name LungGen
 # ---- 肺泡泡沫 ----
 # 配比口径：肺泡直径 2R ≈ 140，玩家直径 44 -> 面积占比 ≈ (22/70)^2 ≈ 10%
 # 肺泡放大 + 数量减少：单个腔室更大，地形不那么破碎，也不那么崎岖
-const ALV_R_MIN := 118.0
-const ALV_R_MAX := 134.0
-const ALV_JITTER_POS := 11.0
-const ALV_JITTER_R := 0.03
+const ALV_R_MIN := 110.0
+const ALV_R_MAX := 136.0
+const ALV_JITTER_POS := 20.0
+const ALV_JITTER_R := 0.06
+const HUB_R := 158.0             # 少量大叶泡：能展开走位的「主战厅」，不是全都一样大
 const MIN_SEPTUM := 62.0        # 隔膜必须比门宽，肉壁才连得成网（肺泡变大，隔膜同步加厚）
-const NEIGHBOR_RANGE := 1.16    # 以节距为单位，认定「相邻」的距离
+const NEIGHBOR_RANGE := 1.18    # 以节距为单位，认定「相邻」的距离
 
 # ---- 连接管（玩家可走）----
 # 门宽随机：细门只够玩家侧身挤过，粗门能让病毒整股涌进去 —— 同一张图里有宽有窄才有机动感。
 # 下限按玩家碰撞半径卡死（0.72 * PLAYER_R(30) = 21.6），再小玩家就永远过不去。
 const DUCT_R_MIN := 34.0        # 门宽 68：一个大肺泡配一条像样的通道，不再是细缝
 const DUCT_R_MAX := 56.0        # 门宽 112：主通道，扩散会顺着它走
-const EXTRA_LINK_CHANCE := 0.30 # 生成树之外再开这么多旁门，形成环路
-const MAX_DOOR_GAP := 168.0     # 两腔室之间最远还能开门的空隙。
-                                # 之前写死 110 + 小肺泡，肺泡放大后大量树边被这个阈值砍掉，
-                                # 地图碎成 5~8 块孤岛（reach 只有 96%）。按新节距放大到 168 之后重新连成 1 块。
+const EXTRA_LINK_CHANCE := 0.38 # 生成树之外再开这么多旁门，形成环路
+const MAX_DOOR_GAP := 184.0     # 两腔室之间最远还能开门的空隙。
+                                # 按新节距 334、邻接上限 1.18 倍反推，最坏间隙约 174；
+                                # 留 10 单位余量，避免大半径/主战厅种子把生成树边砍掉形成孤岛。
 
 # ---- 孔隙（只有病毒能过）----
 const PORE_R_MIN := 12.0
@@ -57,30 +58,20 @@ const TRUNK_R := 96.0           # 气管半径（192 宽）
 const BRANCH_R := 64.0          # 肺门分支半径（128 宽）
 const BRANCH_COUNT := 3         # 每侧分支数，合计 6 个肺门
 
-# ---- 器官轮廓（按 3040×1320 写死，运行时按实际尺寸缩放）----
-# 每个节点 = [x, y, r]：一个"肉块圆"。左叶沿脊柱上小下大；右叶镜像。
+# ---- 器官轮廓（按 6200×2300 设计，运行时按实际尺寸缩放）----
+# 不再用一排水平胶囊拼肺叶：胶囊交界处会形成台阶和硬凹角。
+# 这里给左叶一圈控制点，Catmull-Rom 采样成连续多边形，右叶镜像；
+# 内侧肺门有凹口，外缘从上段宽阔逐渐收到下段，通道仍由 _airway 接到这个轮廓上。
 const SIL_BASE := Vector2(6200.0, 2300.0)
-# 叶形是「上宽下窄」（按需求方口径）。真解剖学是肺尖窄、肺底宽 —— 想换回真实解剖把这里改 true 即可，
-# SIL_SHAPES 的 y 会整体上下镜像，肺泡撒点跟着走，不用改别的。
-const SIL_FLIP_Y := false
-# 叶形：肺尖很窄 -> 往下逐渐变宽 -> 最宽处在 60% 高度 -> 向肺底收成圆角。
-# 用一串半径递增/递减的圆拼，而不是一个大圆（大圆会变成一个球，看不出是肺）。
-# 叶形不再用「一串圆」拼（圆一多就变成球，看不出是肺）。
-# 下面是一串圆形 + 胶囊，按真实肺的比例摆：肺尖窄 -> 上段细长 -> 中段变宽 -> 肺底最宽并收成圆角。
-# 格式：圆 = [0, x, y, 0, 0, r]；胶囊 = [1, ax, ay, bx, by, r]；右叶自动镜像。
-const SIL_SHAPES := [
-	# 上宽下窄的叶形：每一「排」是一条水平胶囊，宽度自上而下逐级收窄，
-	# 圆顶靠最上面一排的圆角收出来，底部收成小叶尖 —— 不是一根柱子，也不是一个球。
-	[1, 650.0, 380.0, 2550.0, 380.0, 200.0],     # 肺尖（宽 2300，最上、最宽）
-	[1, 670.0, 650.0, 2530.0, 650.0, 250.0],     # 上段（2360）
-	[1, 780.0, 950.0, 2420.0, 950.0, 300.0],     # 上中段（2240）
-	[1, 900.0, 1250.0, 2300.0, 1250.0, 300.0],   # 中段（2000）
-	[1, 1040.0, 1550.0, 2160.0, 1550.0, 260.0],  # 下段（1640）
-	[1, 1200.0, 1800.0, 2000.0, 1800.0, 220.0],  # 下段（1240）
-	[1, 1360.0, 2000.0, 1840.0, 2000.0, 180.0],  # 肺底（840）
-	[1, 1480.0, 2130.0, 1720.0, 2130.0, 140.0],  # 肺底尖（520，收圆角）
+const SIL_FLIP_Y := false          # true = 换回解剖学上「肺尖窄、肺底宽」
+const SIL_LEFT := [
+	[2490.0, 210.0], [2100.0, 175.0], [1500.0, 180.0], [900.0, 220.0],
+	[610.0, 330.0], [500.0, 570.0], [450.0, 900.0], [430.0, 1240.0],
+	[470.0, 1510.0], [570.0, 1760.0], [740.0, 1970.0], [990.0, 2140.0],
+	[1240.0, 2190.0], [1480.0, 2110.0], [1690.0, 1930.0], [1870.0, 1690.0],
+	[2070.0, 1430.0], [2260.0, 1150.0], [2280.0, 980.0], [2150.0, 855.0],
+	[2200.0, 720.0], [2400.0, 520.0], [2560.0, 330.0],
 ]
-# 气管 / 主支气管不在这里：它们自带轮廓（见 _airway），否则纵隔会被填成一根柱子
 
 var _alv: Array = []   # 本局所有肺泡 [中心, 半径]，给支气管分支找落点用
 
@@ -129,34 +120,40 @@ func build(seed_value: int, size: Vector2) -> OrganMap:
 func _silhouette(m: OrganMap, size: Vector2) -> void:
 	var kx: float = size.x / SIL_BASE.x
 	var ky: float = size.y / SIL_BASE.y
-	var kr: float = (kx + ky) * 0.5
 	var cy := SIL_BASE.y * 0.5
-
-	for n in SIL_SHAPES:
-		var r := float(n[5]) * kr
-		var sy2 := float(n[2])
-		var sy4 := float(n[4])
+	var ctrl: Array[Vector2] = []
+	for n in SIL_LEFT:
+		var y := float(n[1])
 		if SIL_FLIP_Y:
-			sy2 = cy * 2.0 - sy2
-			sy4 = cy * 2.0 - sy4
-		if int(n[0]) == 0:
-			var p := Vector2(float(n[1]) * kx, sy2 * ky)
-			r = minf(r, minf(p.y - 44.0, size.y - p.y - 44.0))   # 不许顶到场地上下边
-			m.add_clip_circle(p, r)
-			m.add_clip_circle(Vector2(size.x - p.x, p.y), r)      # 右叶镜像
-		else:
-			var a := Vector2(float(n[1]) * kx, sy2 * ky)
-			var b := Vector2(float(n[3]) * kx, sy4 * ky)
-			# 胶囊两端都要留边距，否则肺底会被场地边切平、轮廓出现开口
-			var room := 1.0e9
-			for p2 in [a, b]:
-				room = minf(room, minf(minf(p2.y - 44.0, size.y - p2.y - 44.0),
-					minf(p2.x - 44.0, size.x - p2.x - 44.0)))
-			r = minf(r, room)
-			m.add_clip_capsule(a, b, r)
-			m.add_clip_capsule(Vector2(size.x - a.x, a.y), Vector2(size.x - b.x, b.y), r)
-
+			y = cy * 2.0 - y
+		ctrl.append(Vector2(float(n[0]) * kx, y * ky))
+	var left := _smooth_closed(ctrl, 5)
+	var right := PackedVector2Array()
+	for p in left:
+		right.append(Vector2(size.x - p.x, p.y))
+	m.add_clip_polygon(left)
+	m.add_clip_polygon(right)
 	# 中间只有左右两叶之间的体腔，不放任何轮廓
+
+
+# 闭合 Catmull-Rom：控制点只决定大形，采样点负责把外缘变连续。
+# 每段 5 个采样足够平滑，又不会让胸膜距离查询变得昂贵。
+func _smooth_closed(ctrl: Array[Vector2], steps: int) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	var n := ctrl.size()
+	for i in range(n):
+		var p0 := ctrl[(i - 1 + n) % n]
+		var p1 := ctrl[i]
+		var p2 := ctrl[(i + 1) % n]
+		var p3 := ctrl[(i + 2) % n]
+		for k in range(steps):
+			var t := float(k) / float(steps)
+			var t2 := t * t
+			var t3 := t2 * t
+			out.append(0.5 * ((2.0 * p1) + (-p0 + p2) * t +
+				(2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 +
+				(-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3))
+	return out
 
 
 # ============================================================ 一叶的肺泡泡沫
@@ -189,11 +186,22 @@ func _lobe(m: OrganMap, rng: RandomNumberGenerator, rect: Rect2) -> void:
 			cx.append(p)
 			cr.append(r)
 
+	# 每叶两个「主战厅」：肺门附近一个、深部一个。
+	# 大空间用来走位和清群，小肺泡与窄门仍然负责节奏和绕行，不再是一张均匀蜂窝。
+	var hub_targets := [
+		rect.position + Vector2(rect.size.x * 0.58, rect.size.y * 0.30),
+		rect.position + Vector2(rect.size.x * 0.48, rect.size.y * 0.73),
+	]
+	for target in hub_targets:
+		var hi := _nearest_point(cx, target)
+		if hi >= 0:
+			cr[hi] = minf(HUB_R, m.clip_inside_dist(cx[hi]) * 0.90)
+
 	if cx.size() < 4:
 		return
 
 	# 位置松弛：任何一对肺泡之间都要留出隔膜
-	for _it in range(5):
+	for _it in range(7):
 		var moved := false
 		for i in range(cx.size()):
 			for j in range(i + 1, cx.size()):
@@ -403,6 +411,9 @@ func _door(m: OrganMap, cx: Array[Vector2], cr: Array[float], i: int, j: int,
 	else:
 		dr = rng.randf_range(DUCT_R_MIN + 18.0, DUCT_R_MAX)
 	dr = minf(dr, minf(cr[i], cr[j]) * 0.5)       # 窄肺泡配窄门，别把整颗凿穿
+	# 连到主战厅的门至少是一条主路：大厅不能只能靠侧身小门进出。
+	if maxf(cr[i], cr[j]) >= HUB_R * 0.90:
+		dr = maxf(dr, minf(50.0, minf(cr[i], cr[j]) * 0.42))
 	m.add_capsule(pa, pb, dr)
 
 
@@ -430,11 +441,29 @@ func _airway(m: OrganMap, rng: RandomNumberGenerator, size: Vector2) -> void:
 		if t1 != Vector2.INF:
 			m.add_capsule(hilar, t1, BRANCH_R)
 			m.add_clip_capsule(hilar, t1, BRANCH_R + 46.0)
+			var route_end := t1
 			# 第二条分支：从肺门再往里走一段，多一个入口
 			var t2b := _nearest_alv(hilar + Vector2(side * 150.0 * kx, size.y * 0.14))
 			if t2b != Vector2.INF and t2b.distance_to(t1) > 120.0:
 				m.add_capsule(t1, t2b, BRANCH_R * 0.85)
 				m.add_clip_capsule(t1, t2b, BRANCH_R + 40.0)
+				route_end = t2b
+			# 第三条较窄的深部支路：给玩家跨区绕行路线，也给病毒一条捷径。
+			var t3 := _nearest_alv(hilar + Vector2(side * 220.0 * kx, size.y * 0.34))
+			if t3 != Vector2.INF and t3.distance_to(route_end) > 180.0:
+				m.add_capsule(route_end, t3, BRANCH_R * 0.68)
+				m.add_clip_capsule(route_end, t3, BRANCH_R + 24.0)
+
+
+func _nearest_point(points: Array[Vector2], probe: Vector2) -> int:
+	var best := -1
+	var bd := 1.0e20
+	for i in range(points.size()):
+		var d := points[i].distance_squared_to(probe)
+		if d < bd:
+			bd = d
+			best = i
+	return best
 
 
 func _nearest_alv(probe: Vector2) -> Vector2:

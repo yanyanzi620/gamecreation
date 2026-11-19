@@ -19,8 +19,9 @@ class_name OrganMap
 
 const CELL := 30.0        # 墙段分桶用的粗格（与病毒种群同格）
 const PIX := 8.0          # 掩码 / 距离场的分辨率
-const SIMPLIFY_EPS := 2.0 # 轮廓简化容差（像素）
-const CONTOUR_STEP := 20.0 # 轮廓采样步长（比 CELL 细，边缘更圆）
+const SIMPLIFY_EPS := 1.25 # 轮廓简化容差（世界单位）：保留圆弧，不画成折线宝石
+const CONTOUR_STEP := 16.0 # 轮廓采样步长：比碰撞栅格细，弯曲边缘更顺滑
+const SMOOTH_UNION := 10.0 # 流明形状相交处的圆角半径，只影响轮廓（最大修正 2.5 单位）
 const SHAPE_CELL := 64.0   # 形状索引粗格（加速 sdf 查询）
 
 var size := Vector2(1600.0, 1000.0)
@@ -77,6 +78,17 @@ func add_clip_capsule(a: Vector2, b: Vector2, r: float) -> void:
 	clip_shapes.append([1, a, b, r])
 
 
+# 连续肺叶边界。多边形由生成器先用 Catmull-Rom 采样好，
+# 与圆 / 胶囊仍是并集；支气管可以照常接到肺门上。
+func add_clip_polygon(points: PackedVector2Array) -> void:
+	if points.size() < 3:
+		return
+	var box := Rect2(points[0], Vector2.ZERO)
+	for p in points:
+		box = box.expand(p)
+	clip_shapes.append([2, points, box, 0.0])
+
+
 func add_capsule(a: Vector2, b: Vector2, r: float) -> void:
 	_shapes.append([1, a, b, r])
 
@@ -96,8 +108,8 @@ func sdf(p: Vector2) -> float:
 				d = p.distance_to(sh[1]) - float(sh[3])
 			else:
 				d = _pt_seg_dist(p, sh[1], sh[2]) - float(sh[3])
-			if d < best:
-				best = d
+			if d < best + SMOOTH_UNION:
+				best = _smooth_min(best, d)
 	return best
 
 
@@ -109,9 +121,16 @@ func _sdf_full(p: Vector2) -> float:
 			d = p.distance_to(sh[1]) - float(sh[3])
 		else:
 			d = _pt_seg_dist(p, sh[1], sh[2]) - float(sh[3])
-		if d < best:
-			best = d
+		if d < best + SMOOTH_UNION:
+			best = _smooth_min(best, d)
 	return best
+
+
+# 多项式 smooth-min：把两个流明相交处的硬凹角抹圆。
+# 最大改动只有 K/4 = 2.5 世界单位，小于碰撞栅格，不会把门或隔膜吃掉。
+func _smooth_min(a: float, b: float) -> float:
+	var h := clampf(0.5 + 0.5 * (a - b) / SMOOTH_UNION, 0.0, 1.0)
+	return lerpf(a, b, h) - SMOOTH_UNION * h * (1.0 - h)
 
 
 func _sidx_key(p: Vector2) -> int:
@@ -206,6 +225,9 @@ func _rasterize_clip() -> void:
 	_in.resize(_mw * _mh)
 	_in.fill(0)
 	for s in clip_shapes:
+		if int(s[0]) == 2:
+			_rasterize_clip_polygon(s[1], s[2])
+			continue
 		var r2 := float(s[3])
 		var aabb2 := Rect2(s[1], Vector2.ZERO).expand(s[2]).grow(r2)
 		var a0 := clampi(int(aabb2.position.x / PIX), 0, _mw - 1)
@@ -224,6 +246,28 @@ func _rasterize_clip() -> void:
 					_in[j * _mw + i] = 1
 
 
+# 扫描线填充一个 clip 多边形：不做「每像素 × 每边」的点包含测试，
+# 连续肺叶轮廓的栅格化成本与圆形裁剪是同一量级。
+func _rasterize_clip_polygon(poly: PackedVector2Array, box: Rect2) -> void:
+	var j0 := clampi(int(box.position.y / PIX), 0, _mh - 1)
+	var j1 := clampi(int((box.position.y + box.size.y) / PIX), 0, _mh - 1)
+	var n := poly.size()
+	for j in range(j0, j1 + 1):
+		var y := (float(j) + 0.5) * PIX
+		var xs: Array[float] = []
+		for k in range(n):
+			var a := poly[k]
+			var b := poly[(k + 1) % n]
+			if (a.y <= y and b.y > y) or (b.y <= y and a.y > y):
+				xs.append(a.x + (y - a.y) * (b.x - a.x) / (b.y - a.y))
+		xs.sort()
+		for q in range(0, xs.size() - 1, 2):
+			var i0 := clampi(int(ceil(xs[q] / PIX - 0.5)), 0, _mw - 1)
+			var i1 := clampi(int(floor(xs[q + 1] / PIX - 0.5)), 0, _mw - 1)
+			for i in range(i0, i1 + 1):
+				_in[j * _mw + i] = 1
+
+
 # 到器官外边界的距离（0 = 在轮廓上，>0 = 在外），用于「不要把肺泡摆到体外」
 func clip_sdf(p: Vector2) -> float:
 	if clip_shapes.is_empty():
@@ -233,6 +277,8 @@ func clip_sdf(p: Vector2) -> float:
 		var d := 0.0
 		if s[0] == 0:
 			d = maxf(0.0, p.distance_to(s[1]) - float(s[3]))
+		elif int(s[0]) == 2:
+			d = maxf(0.0, -_polygon_inside_dist(p, s[1]))
 		else:
 			d = maxf(0.0, _pt_seg_dist(p, s[1], s[2]) - float(s[3]))
 		best = minf(best, d)
@@ -249,14 +295,35 @@ func clip_inside_dist(p: Vector2) -> float:
 	for s in clip_shapes:
 		var kind: int = int(s[0])
 		var d := 0.0
-		if kind == 0:
-			d = (p as Vector2).distance_to(s[1] as Vector2)
+		var inside := 0.0
+		if kind == 2:
+			inside = _polygon_inside_dist(p, s[1])
 		else:
-			d = _dist_point_seg(p, s[1] as Vector2, s[2] as Vector2)
-		var inside: float = float(s[3]) - d
+			if kind == 0:
+				d = (p as Vector2).distance_to(s[1] as Vector2)
+			else:
+				d = _dist_point_seg(p, s[1] as Vector2, s[2] as Vector2)
+			inside = float(s[3]) - d
 		if inside > best:
 			best = inside
 	return best
+
+
+# 正 = 多边形内，负 = 多边形外；绝对值 = 到边界的距离。
+# 只在生成期调用：肺泡落点、胸膜轮廓采样。
+func _polygon_inside_dist(p: Vector2, poly: PackedVector2Array) -> float:
+	var best := 1.0e20
+	var inside := false
+	var n := poly.size()
+	for k in range(n):
+		var a := poly[k]
+		var b := poly[(k + 1) % n]
+		best = minf(best, p.distance_squared_to(Geometry2D.get_closest_point_to_segment(p, a, b)))
+		if (a.y > p.y) != (b.y > p.y):
+			var cross_x := a.x + (p.y - a.y) * (b.x - a.x) / (b.y - a.y)
+			if cross_x > p.x:
+				inside = not inside
+	return sqrt(best) if inside else -sqrt(best)
 
 
 func _dist_point_seg(p: Vector2, a: Vector2, b: Vector2) -> float:
@@ -691,6 +758,11 @@ func loop_is_closed(i: int) -> bool:
 # 给渲染层烘焙贴图用
 func mask_size() -> Vector2i:
 	return Vector2i(_mw, _mh)
+
+
+# 渲染层共享已经算好的流明距离场，不再重复跑一遍倒角变换。
+func distance_field() -> PackedFloat32Array:
+	return _dist
 
 
 func solid_cell(i: int, j: int) -> bool:
