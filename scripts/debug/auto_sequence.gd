@@ -29,13 +29,15 @@ func setup(h) -> void:
 
 func wants_run() -> bool:
 	var a := OS.get_cmdline_user_args()
-	return a.has("--shot") or a.has("--aim") or a.has("--overview") or a.has("--stress") or a.has("--walk") or a.has("--econ")
+	return a.has("--shot") or a.has("--aim") or a.has("--overview") or a.has("--stress") or a.has("--walk") or a.has("--econ") or a.has("--wall")
 
 
 func run() -> void:
 	var a := OS.get_cmdline_user_args()
 	if a.has("--econ"):
 		_econ()
+	elif a.has("--wall"):
+		_wallcheck()
 	elif a.has("--aim"):
 		await _aim()
 	elif a.has("--overview"):
@@ -107,6 +109,72 @@ func _overview() -> void:
 	host.cam.reset_smoothing()
 	await get_tree().create_timer(0.80).timeout
 	_save("res://overview.png")
+	get_tree().quit()
+
+
+# ============================================================ 贴墙命中自测
+# 在「离肉壁 ≤2px」的位置人造一颗病毒，从 300px 外用射流打它。
+# 这是回归项：只要射程按「墙前 12px 死区」算，这里就会掉到很低甚至 0。
+func _wallcheck() -> void:
+	var organ = host.pop.organ
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 20261120
+	var spots := PackedVector2Array()
+	var tries := 0
+	while spots.size() < 12 and tries < 40000:
+		tries += 1
+		var p := Vector2(rng.randf_range(220.0, Balance.ARENA_W - 220.0),
+			rng.randf_range(220.0, Balance.ARENA_H - 220.0))
+		if organ.solid_point(p):
+			continue
+		var mind := 999.0
+		for k in range(8):
+			var dd := Vector2.RIGHT.rotated(float(k) * TAU / 8.0)
+			var dist := 1.0
+			while dist <= 40.0:
+				if organ.solid_point(p + dd * dist):
+					break
+				dist += 1.0
+			mind = minf(mind, dist)
+		if mind <= 2.0:
+			spots.append(p)
+	var tried := 0
+	var killed := 0
+	var no_lane := 0
+	for p in spots:
+		# 找一个「站得下人、且到目标视线通畅」的发射点，模拟玩家正对着它开火
+		var ok := false
+		var origin := Vector2.ZERO
+		var dir := Vector2.RIGHT
+		for k in range(16):
+			var a := float(k) * TAU / 16.0
+			var o: Vector2 = p + Vector2.RIGHT.rotated(a) * 300.0
+			if o.x < 80.0 or o.x > Balance.ARENA_W - 80.0 or o.y < 80.0 or o.y > Balance.ARENA_H - 80.0:
+				continue
+			if organ.solid_point(o):
+				continue
+			if not organ.line_free(o.x, o.y, p.x, p.y):
+				continue
+			origin = o
+			dir = (p - o).normalized()
+			ok = true
+			break
+		if not ok:
+			no_lane += 1
+			continue
+		var idx: int = host.pop._spawn(p.x, p.y, 8.0, 0, 0, 0.0, 900001, 0.0, 0.0)
+		if idx < 0:
+			no_lane += 1
+			continue
+		tried += 1
+		host.pop.clear_fan(origin, dir, Balance.JET_LENGTH, deg_to_rad(Balance.JET_HALF_ANGLE_DEG))
+		if host.pop._ptype[idx] == 1:
+			killed += 1
+		else:
+			print("[WALL] miss at %s (wall dist probe passed, origin %s)" % [p, origin])
+	var pct := 100.0 * float(killed) / maxf(1.0, float(tried))
+	print("[WALL] spots=%d tried=%d killed=%d no_lane=%d -> %.0f%% (目标 100%%)" % [
+		spots.size(), tried, killed, no_lane, pct])
 	get_tree().quit()
 
 

@@ -67,6 +67,7 @@ const RETRY_MAX := Balance.VIRUS_RETRY_MAX
 const Satur_MIN := Balance.VIRUS_SATUR_COOL_MIN
 const Satur_MAX := Balance.VIRUS_SATUR_COOL_MAX
 const JET_RAYS := Balance.JET_RAYS
+const JET_WALL_SKIN := Balance.JET_WALL_SKIN
 
 # 跳跃链 = 单点传播：不粘连、不稳方向，只保证「整体往前推」
 # 每次繁殖在空中随机落一个点，点与点之间天然留空，视觉上不会糊成条带
@@ -760,7 +761,16 @@ func clear_fan(origin: Vector2, dir: Vector2, length: float, half_angle: float) 
 		var l := sqrt(l2)
 		var diff := _ang_signed(atan2(vy, vx), dn.angle())
 		var bucket := clampi(int(round((diff + half_angle) / (2.0 * half_angle) * float(JET_RAYS - 1))), 0, JET_RAYS - 1)
-		if l > rays[bucket]:
+		# 取本射线和左右各一条射线里「最远的那条」当可用射程：
+		# 15 条射线对角度的切分是粗糙的，粒子落在两条射线之间时，
+		# 它所属的那条可能刚好被墙角切短，而旁边那条其实是通的 ——
+		# 只认自己那一条，就会出现「明明在扇形里、明明看得见却打不掉」的漏网粒子。
+		var reach_here := rays[bucket]
+		if bucket > 0:
+			reach_here = maxf(reach_here, rays[bucket - 1])
+		if bucket < JET_RAYS - 1:
+			reach_here = maxf(reach_here, rays[bucket + 1])
+		if l > reach_here:
 			continue
 		_to_corpse(i)
 		hit += 1
@@ -772,7 +782,7 @@ func clear_fan(origin: Vector2, dir: Vector2, length: float, half_angle: float) 
 func _fan_rays(origin: Vector2, dir: Vector2, length: float, half_angle: float) -> PackedFloat32Array:
 	var rays := PackedFloat32Array()
 	rays.resize(JET_RAYS)
-	var step := 12.0
+	var step := 10.0
 	var shape := PackedVector2Array()
 	fan_band_clips = 0
 	for r in range(JET_RAYS):
@@ -784,7 +794,20 @@ func _fan_rays(origin: Vector2, dir: Vector2, length: float, half_angle: float) 
 			var a := origin + d * t
 			var b := origin + d * minf(t + step, length)
 			if organ != null and organ.blocked(a, b):
-				reach = t
+				# 二分出「墙到底在哪一点」：以前直接取这一段的起点当射程，
+				# 结果墙面之前最多 12px 的那条死区永远打不到 ——
+				# 贴墙长出来的病毒就变成了打不干净的漏网之鱼。
+				var lo := t
+				var hi := minf(t + step, length)
+				for k in range(6):
+					var mid := (lo + hi) * 0.5
+					if organ.blocked(origin + d * lo, origin + d * mid):
+						hi = mid
+					else:
+						lo = mid
+				# 再放宽一个 JET_WALL_SKIN：粒子的视觉半径压在墙上时，
+				# 圆心可能还在墙里一点点，不给这点容差它就永远打不着
+				reach = minf(lo + JET_WALL_SKIN, length)
 				break
 			t = minf(t + step, length)
 		# 阻隔带也挡射线：带子是一道墙，射流打在上面就停（闪烁期穿过，与「生效前穿越只减速」一致）
