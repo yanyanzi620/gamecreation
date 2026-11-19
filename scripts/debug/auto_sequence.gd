@@ -3,7 +3,10 @@ extends Node
 # 自动验收 / 压测 / 截图 —— 只在命令行带参数时运行，绝不参与正常游戏
 #
 #   -- --shot        四张实拍（射流 / 尸体 / 阻隔带挡弹道 / 引信），约 27s 后自动退出
+#   -- --aim         瞄准预览三连拍（阻隔带可放 / 阻隔带放不下 / 引信），并验证落位接口
 #   -- --overview    全图俯瞰，核对器官轮廓与肺泡尺寸
+#   -- --stress      只跑病毒模拟 3600 帧，量「几万颗时单帧还撑不撑得住」
+#   -- --walk        贴墙滑行自测：新逻辑 vs 旧「只走一个轴」的 A/B 对比
 #   -- --stress      只跑病毒模拟 3600 帧，量「几万颗时单帧还撑不撑得住」
 #   -- --walk        贴墙滑行自测：新逻辑 vs 旧「只走一个轴」的 A/B 对比
 #
@@ -26,12 +29,14 @@ func setup(h) -> void:
 
 func wants_run() -> bool:
 	var a := OS.get_cmdline_user_args()
-	return a.has("--shot") or a.has("--overview") or a.has("--stress") or a.has("--walk")
+	return a.has("--shot") or a.has("--aim") or a.has("--overview") or a.has("--stress") or a.has("--walk")
 
 
 func run() -> void:
 	var a := OS.get_cmdline_user_args()
-	if a.has("--overview"):
+	if a.has("--aim"):
+		await _aim()
+	elif a.has("--overview"):
 		await _overview()
 	elif a.has("--stress"):
 		_stress()
@@ -39,6 +44,58 @@ func run() -> void:
 		_walk()
 	else:
 		await _shot()
+
+
+# ============================================================ 瞄准预览三连拍
+# 拖拽瞄准是纯输入层的东西，命令行里没法真的拖鼠标；这里直接驱动预览层，
+# 目的是用画面确认「预览看到的」和「落下去的」是同一份几何。
+func _aim() -> void:
+	await get_tree().create_timer(0.60).timeout
+	var origin: Vector2 = host.player_unit.position
+	var aim := Vector2.RIGHT
+	var open_reach := 0.0
+	for k in range(24):
+		var ang := TAU * float(k) / 24.0
+		var d := Vector2(cos(ang), sin(ang))
+		var r := 0.0
+		while r < 520.0 and not host._map.solid_point(origin + d * (r + 20.0)):
+			r += 20.0
+		if r > open_reach:
+			open_reach = r
+			aim = d
+
+	# ① 阻隔带：能放（青色）—— 两端被肉壁裁短的话会看到两道黄色横杠
+	var good: Vector2 = origin + aim * minf(open_reach - 40.0, 300.0)
+	host.preview.set_block(origin, good, true, Balance.BLOCK_RANGE_MAX)
+	await get_tree().create_timer(0.20).timeout
+	_save("res://aim_block.png")
+
+	# ② 阻隔带：养分不够（红色）—— 拖拽照旧、只是不能落位，给玩家的即时反馈
+	host.preview.set_block(origin, good, false, Balance.BLOCK_RANGE_MAX)
+	await get_tree().create_timer(0.20).timeout
+	_save("res://aim_block_low.png")
+
+	# ③ 引信：可放（青色双圈：内圈清场 / 外圈只吸跳跃链）
+	var fuse_spot: Vector2 = origin + aim * minf(open_reach - 30.0, Balance.FUSE_RANGE_MAX)
+	host.preview.set_fuse(origin, fuse_spot, true, Balance.FUSE_RANGE_MAX)
+	await get_tree().create_timer(0.20).timeout
+	_save("res://aim_fuse.png")
+	host.preview.clear()
+
+	# 落位接口真跑一遍（养分给够，否则第二条会被余额挡掉，测不到几何）
+	host.aura.nutrient = 120
+	var ok_block: bool = host.place_block_at(good)
+	var ok_fuse: bool = host.place_fuse_at(fuse_spot)
+	var span: Array = host.pop.block_span(0)
+	var blen := float(span[2]) if span.size() >= 3 else -1.0
+	print("[AIM] block=%s len=%.0f (满长 %.0f) | fuse=%s | nut=%d blocks=%d fuses=%d" % [
+		str(ok_block), blen, Balance.BLOCK_LEN,
+		str(ok_fuse), host.aura.nutrient, host.pop.block_count(), host.pop.fuse_count()
+	])
+	await get_tree().create_timer(0.90).timeout
+	_save("res://aim_placed.png")
+	get_tree().quit()
+
 
 
 # ============================================================ 俯瞰

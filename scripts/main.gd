@@ -9,19 +9,27 @@ extends Node2D
 #   scripts/world/organ_view.gd      地图渲染（含可开关的装饰层）
 #   scripts/world/virus_population.gd 病毒粒子池：扩散 / 尸体 / 阻隔带 / 引信 / 查询
 #   scripts/units/player_unit.gd     免疫单元（位置 / 绘制 / 贴墙滑行）
-#   scripts/units/tools/*            手段：射流、净化场 + 养分拾取
+#   scripts/units/tools/*            手段：射流、净化场 + 养分拾取、瞄准预览
 #   scripts/ui/*                     HUD、小地图
 #   scripts/debug/*                  自测、探针、自动验收
 #
 # 操作
 #   WASD 移动（肉壁和阻隔带都挡人，撞上沿墙滑动）
-#   左键 射流 / 右键 阻隔带(30) / 空格 引信(40) / R 换一张肺 / F 装饰层
+#   左键      射流（点一下即发）
+#   右键      阻隔带(30)：按住拖拽定位，松开落位；带子恒垂直于「单元→光标」连线
+#   空格      引信(40)：按住拖拽定位，松开落位；落点受距离上限约束
+#   R 换一张肺 / F 装饰层
 # 命令行：--seed=NNN 固定地图；--shot / --overview / --stress / --walk 见 scripts/debug/auto_sequence.gd
 # ============================================================
 
 const STEP := 1.0 / 60.0
 const MAX_CATCHUP := 8              # 单帧最多补几次模拟，防止失焦回来疯狂追帧
 const Virus = preload("res://scripts/world/virus_population.gd")
+
+# 瞄准态：按住 -> 拖拽 -> 松开落位
+const MODE_NONE := 0
+const MODE_BLOCK := 1
+const MODE_FUSE := 2
 
 var pop
 var player_unit
@@ -31,6 +39,7 @@ var jet
 var aura
 var hud
 var auto_seq
+var preview
 
 var map_seed := Balance.DEFAULT_SEED
 
@@ -41,6 +50,7 @@ var _acc := 0.0
 var _blk_cd := 0.0
 var _fuse_cd := 0.0
 var _tick_us := 0
+var _aim := MODE_NONE
 
 
 func _ready() -> void:
@@ -94,6 +104,13 @@ func _build() -> void:
 	player_unit.name = "Unit"
 	player_unit.z_index = 0
 	add_child(player_unit)
+
+	# 瞄准预览画在单元之上（z 3），只画「松开后会落在哪」
+	preview = load("res://scripts/units/tools/aim_preview.gd").new()
+	preview.name = "AimPreview"
+	preview.z_index = 3
+	add_child(preview)
+	preview.bind(pop)
 
 	cam = Camera2D.new()
 	cam.name = "Cam"
@@ -230,30 +247,98 @@ func _spawn_wave() -> void:
 func _unhandled_input(e: InputEvent) -> void:
 	if e is InputEventKey:
 		var k := e as InputEventKey
-		if not k.pressed or k.echo:
+		if k.echo:
 			return
 		if k.keycode == KEY_SPACE:
-			place_fuse_at(get_global_mouse_position())
-		elif k.keycode == KEY_F:
+			# 按住空格 -> 拖拽瞄准；松开 -> 落位
+			# 养分不够也进瞄准态：预览会变红，玩家知道是「钱不够」而不是「键坏了」
+			if k.pressed:
+				_aim = MODE_FUSE
+			elif _aim == MODE_FUSE:
+				_commit_fuse()
+			return
+		if not k.pressed:
+			return
+		if k.keycode == KEY_F:
 			if view != null:
 				view.set_decor_on(not view.decor_on)
 				print("[DECOR] on=%s" % str(view.decor_on))
 		elif k.keycode == KEY_R:
+			_aim = MODE_NONE
+			preview.clear()
 			_reseed(true)
 		return
 
 	if not (e is InputEventMouseButton):
 		return
 	var mb := e as InputEventMouseButton
-	if not mb.pressed:
-		return
-	var pos := get_global_mouse_position()
 	if mb.button_index == MOUSE_BUTTON_LEFT:
-		fire_at(pos)
-	elif mb.button_index == MOUSE_BUTTON_RIGHT:
-		if _blk_cd <= 0.0:
-			if place_block_at(pos):
-				_blk_cd = Balance.BLOCK_COOLDOWN
+		if mb.pressed:
+			fire_at(get_global_mouse_position())
+		return
+	if mb.button_index == MOUSE_BUTTON_RIGHT:
+		# 按住右键 -> 拖拽瞄准；松开 -> 落位（养分/冷却不够时预览是红的）
+		if mb.pressed:
+			_aim = MODE_BLOCK
+		elif _aim == MODE_BLOCK:
+			_commit_block()
+
+
+# ------------------------------------------------------------ 瞄准与落位
+
+func _can_block() -> bool:
+	return _blk_cd <= 0.0 and aura.nutrient >= Balance.BLOCK_COST
+
+
+func _can_fuse() -> bool:
+	return _fuse_cd <= 0.0 and aura.nutrient >= Balance.FUSE_COST
+
+
+# 把光标夹到「本次手段允许的距离」上：阻隔带有近/远两头，引信只有远头
+func _aim_spot() -> Vector2:
+	var d: Vector2 = get_global_mouse_position() - player_unit.position
+	var lim: float = Balance.BLOCK_RANGE_MAX if _aim == MODE_BLOCK else Balance.FUSE_RANGE_MAX
+	var lo: float = Balance.BLOCK_RANGE_MIN if _aim == MODE_BLOCK else 0.0
+	var dl := d.length()
+	if dl < 1.0:
+		d = Vector2.RIGHT
+		dl = 1.0
+	return player_unit.position + d.normalized() * clampf(dl, lo, lim)
+
+
+# 引信不能落在肉壁里：往流明吸一下；吸不到就算放不下
+func _fuse_spot(at: Vector2) -> Vector2:
+	var spot := at
+	if _map.solid_point(spot):
+		spot = _map.nearest_free(spot, 80.0)
+		if spot.x < 0.0:
+			return Vector2(-1.0, -1.0)
+	return spot
+
+
+func _update_aim() -> void:
+	if _aim == MODE_NONE:
+		return
+	var spot := _aim_spot()
+	if _aim == MODE_BLOCK:
+		preview.set_block(player_unit.position, spot, _can_block(), Balance.BLOCK_RANGE_MAX)
+	else:
+		var fs := _fuse_spot(spot)
+		preview.set_fuse(player_unit.position, fs, _can_fuse() and fs.x >= 0.0, Balance.FUSE_RANGE_MAX)
+
+
+func _commit_block() -> void:
+	var spot := _aim_spot()
+	_aim = MODE_NONE
+	preview.clear()
+	place_block_at(spot)
+
+
+func _commit_fuse() -> void:
+	var spot := _aim_spot()
+	_aim = MODE_NONE
+	preview.clear()
+	place_fuse_at(spot)
 
 
 # ============================================================ 手段（供输入与自动验收共用）
@@ -265,30 +350,30 @@ func fire_at(target: Vector2) -> int:
 	return jet.fire(player_unit.position, d)
 
 
+# target 就是「带子中心要落在哪」：方向 = 单元→target，带子垂直于它
 func place_block_at(target: Vector2) -> bool:
-	if aura.nutrient < Balance.BLOCK_COST:
+	if not _can_block():
 		return false
 	var d: Vector2 = target - player_unit.position
 	if d.length() < 1.0:
 		d = Vector2.RIGHT
-	if not pop.place_block(player_unit.position, d):
+	if not pop.place_block(player_unit.position, d, d.length()):
 		return false
 	aura.nutrient -= Balance.BLOCK_COST
+	_blk_cd = Balance.BLOCK_COOLDOWN
 	return true
 
 
 func place_fuse_at(target: Vector2) -> bool:
-	if _fuse_cd > 0.0 or aura.nutrient < Balance.FUSE_COST:
+	if not _can_fuse():
 		return false
 	var d: Vector2 = target - player_unit.position
 	if d.length() < 1.0:
 		d = Vector2.RIGHT
-	var spot: Vector2 = player_unit.position + d.normalized() * Balance.FUSE_OFFSET
-	# 引信不能丢在肉壁里，往流明吸一下
-	if _map.solid_point(spot):
-		spot = _map.nearest_free(spot, 80.0)
-		if spot.x < 0.0:
-			return false
+	var spot: Vector2 = player_unit.position + d.normalized() * minf(d.length(), Balance.FUSE_RANGE_MAX)
+	spot = _fuse_spot(spot)
+	if spot.x < 0.0:
+		return false
 	if not pop.add_fuse(spot):
 		return false
 	aura.nutrient -= Balance.FUSE_COST
@@ -309,6 +394,7 @@ func _process(delta: float) -> void:
 	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
 		mv.y += 1.0
 	player_unit.move_input(mv, delta)
+	_update_aim()
 
 	if cam != null:
 		cam.position = player_unit.position

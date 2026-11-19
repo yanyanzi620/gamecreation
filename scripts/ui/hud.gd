@@ -32,7 +32,7 @@ func build(vp: Vector2, minimap_script) -> void:
 	add_child(mini)
 
 	_hint = _label(Vector2(18.0, 156.0), 13, Color(0.60, 0.68, 0.64))
-	_hint.text = "WASD 移动（镜头跟随） · 左键 = 射流 · 右键 = 阻隔带(30) · 空格 = 引信(40) · R = 换一张肺 · F = 装饰层"
+	_hint.text = "WASD 移动（镜头跟随） · 左键 = 射流 · 右键按住拖拽 = 阻隔带(30) · 空格按住拖拽 = 引信(40) · R 换肺 · F 装饰层"
 
 
 func _label(pos: Vector2, size: int, col: Color) -> Label:

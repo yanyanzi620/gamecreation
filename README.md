@@ -8,7 +8,7 @@
 
 - 一张**程序化生成的肺地图**（左右两叶 + 中间支气管），肺泡连通、腔室有纵深
 - 三种病毒粒子：圆盘（圆周扩散）/ 带状（沿轴扩散）/ 跳跃链（单点跳跃、无视阻隔带）
-- 手段：左键射流（扇形、被墙与阻隔带截断）、右键阻隔带（闪烁生效、拦人也拦弹道）、空格引信（内圈清场、外圈吸链）、贴身净化场
+- 手段：左键射流（扇形、被墙与阻隔带截断）、**拖拽式**阻隔带（闪烁生效、拦人也拦弹道、两端被肉壁裁短）、**拖拽式**引信（内圈清场、外圈吸链）、贴身净化场
 - 尸体留疤 30 秒 → 自动拾取 → 养分 → 兑换手段
 - 相机跟随、战术小地图、可开关的装饰层
 
@@ -28,7 +28,8 @@ $exe = 'E:\Godot\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console
 & $exe --path E:\gamecreation 'res://scenes/main.tscn'
 ```
 
-操作：`WASD` 移动 · 左键射流 · 右键阻隔带(30) · 空格引信(40) · `R` 换一张肺 · `F` 装饰层
+操作：`WASD` 移动 · 左键射流 · **右键按住拖拽** 阻隔带(30) · **空格按住拖拽** 引信(40) · `R` 换一张肺 · `F` 装饰层
+（拖拽时松开才落位；阻隔带恒垂直于「单元→光标」连线，两端不许插进肉壁）
 
 ## 验收
 
@@ -37,6 +38,10 @@ $exe = 'E:\Godot\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console
 & $exe --headless --path E:\gamecreation 'res://scenes/debug/map_selftest.tscn'
 # 实拍四张（射流 / 铺带挡弹道 / 引信 / 小地图）
 & $exe --path E:\gamecreation 'res://scenes/main.tscn' -- --shot
+# 瞄准预览四张（含落位验证）
+& $exe --path E:\gamecreation 'res://scenes/main.tscn' -- --aim
+# 落位探针：7680 次随机拖拽，验证端点不插进肉壁
+& $exe --headless --path E:\gamecreation --script res://scripts/debug/aim_probe.gd
 # 俯瞰 / 压测 / 贴墙滑行
 & $exe --path E:\gamecreation 'res://scenes/main.tscn' -- --overview
 & $exe --path E:\gamecreation 'res://scenes/main.tscn' -- --stress

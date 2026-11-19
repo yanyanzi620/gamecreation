@@ -78,7 +78,9 @@ const CHAIN_STEP_MAX := Balance.CHAIN_STEP_MAX
 const BLK_ARM := Balance.BLOCK_ARM
 const BLK_LIFE := Balance.BLOCK_LIFE
 const BLK_LEN := Balance.BLOCK_LEN
-const BLK_OFFSET := Balance.BLOCK_OFFSET
+const BLK_RANGE_MIN := Balance.BLOCK_RANGE_MIN
+const BLK_RANGE_MAX := Balance.BLOCK_RANGE_MAX
+const BLK_MIN_USABLE := Balance.BLOCK_MIN_USABLE
 const BLK_SLACK := Balance.BLOCK_SLACK
 const BLK_STATE_ARM := 0
 const BLK_STATE_ON := 1
@@ -958,29 +960,92 @@ func _drag_chain(i: int, toward: Vector2, dt: float) -> void:
 
 
 # 规则
-#   · 只能落在单元朝前的正前方，不吸附、不拖拽
-#   · 固定长度，释放后先闪烁 BLK_ARM 秒才生效
+#   · 按住右键拖拽定位：拖拽方向 = 来路方向（带子恒垂直于「单元 → 光标」连线）
+#   · 距离受 BLK_RANGE_MIN~MAX 限制；长度固定 BLK_LEN，两端被肉壁裁短（不许插进组织）
+#   · 释放后先闪烁 BLK_ARM 秒才生效
 #   · 生效前已经穿过去的病毒 -> 只有减速（那颗之后繁殖变慢）
 #   · 生效后病毒无法穿过；带子有限长，所以病毒从两端绕过去（绕射）
-#   · 只拦病毒，不拦玩家；BLK_LIFE 秒后自溶
+#   · 拦病毒也拦玩家；BLK_LIFE 秒后自溶
 #   · 与「器官隔离」是两件事：阻隔带永不断血，不会造成坏死
 
 func block_count() -> int:
 	return _blk.size()
 
-func place_block(origin: Vector2, dir: Vector2) -> bool:
+
+# 只给验收用：第 i 条带子的端点与长度（不参与玩法判定）
+func block_span(i: int) -> Array:
+	if i < 0 or i >= _blk.size():
+		return []
+	var a: Vector2 = _blk[i]["a"]
+	var b: Vector2 = _blk[i]["b"]
+	return [a, b, a.distance_to(b)]
+
+
+# 算出「这条带子会落在哪」 —— 预览和真正落位共用同一份几何，避免看到的和放下的不一样。
+# 返回 {ok, a, b, c, len, dist, capped, trim, why}
+#   ok=false   : 落点被肉壁怼住 / 裁完太短，放不下来
+#   dist       : 实际使用的距离（可能因为撞墙比请求的近）
+#   capped     : 距离被 BLK_RANGE_MIN/MAX 夹过，或者被墙推近了
+#   trim       : 两端被肉壁吃掉的总长度（给预览提示用）
+#   why        : 放不下的原因（"dir" / "too_close" / "solid" / "too_narrow"），诊断用
+func resolve_block(origin: Vector2, dir: Vector2, dist: float) -> Dictionary:
+	var out := {"ok": false, "a": origin, "b": origin, "c": origin, "len": 0.0, "dist": 0.0, "capped": false, "trim": 0.0, "why": ""}
 	var d := dir.normalized()
-	if d.length() < 0.01:
-		return false
-	var c := origin + d * BLK_OFFSET
+	if d.length_squared() < 0.0001:
+		out["why"] = "dir"
+		return out
+	var want := clampf(dist, BLK_RANGE_MIN, BLK_RANGE_MAX)
+	var capped := absf(want - dist) > 0.5
+	# 中心点不能落在肉壁里：从单元往外走，撞墙就停在墙前
+	var travel := 0.0
+	while travel < want:
+		var nxt := minf(10.0, want - travel)
+		if organ != null and organ.solid_point(origin + d * (travel + nxt)):
+			break
+		travel += nxt
+	if travel < 12.0:
+		out["why"] = "too_close"
+		return out               # 贴着墙站，前面塞不下一条带子
+	if travel < want:
+		capped = true
+	var c: Vector2 = origin + d * travel
 	var half := BLK_LEN * 0.5
 	var perp := Vector2(-d.y, d.x)
-	var a := c - perp * half
-	var b := c + perp * half
-	# 注意：a/b 是沿带子长度方向铺开的，所以带子的「法线」是 d，不是 perp
-	# 之前这里存成了 perp，导致相交判定算的是「沿带子方向」的坐标，
-	# 两侧的点会得到同一个值 -> 永远判不出穿越 -> 阻隔带一直没真正生效
-	_blk.append({"a": a, "b": b, "n": d, "t": 0.0, "state": BLK_STATE_ARM})
+	var a: Vector2 = c - perp * half
+	var b: Vector2 = c + perp * half
+	var trim := 0.0
+	if organ != null:
+		# 两头往可通行区里裁：带子不许插进肉壁（这就是「加碰撞检测」的落点）
+		var sp: Dictionary = organ.clip_span(c, perp, half, 8.0)
+		if not bool(sp["ok"]):
+			out["why"] = "solid"
+			return out
+		a = sp["a"]
+		b = sp["b"]
+		trim = float(sp["trim"])
+		if float(sp["len"]) < BLK_MIN_USABLE:
+			out["why"] = "too_narrow"
+			out["len"] = float(sp["len"])
+			return out           # 通道太窄，裁完只剩一小截，堵不住任何东西
+	out["a"] = a
+	out["b"] = b
+	out["c"] = c
+	out["len"] = a.distance_to(b)
+	out["dist"] = travel
+	out["capped"] = capped
+	out["trim"] = trim
+	out["ok"] = true
+	return out
+
+
+func place_block(origin: Vector2, dir: Vector2, dist: float) -> bool:
+	var r: Dictionary = resolve_block(origin, dir, dist)
+	if not bool(r["ok"]):
+		return false
+	var d := dir.normalized()
+	# a/b 是沿带子长度方向铺开的，所以带子的「法线」是 d，不是 perp
+	# （早期这里存成 perp，导致相交判定算的是「沿带子方向」的坐标 -> 带子永远不生效）
+	_blk.append({"a": r["a"], "b": r["b"], "n": d, "t": 0.0, "state": BLK_STATE_ARM})
 	queue_redraw()
 	return true
 

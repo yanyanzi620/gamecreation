@@ -708,6 +708,51 @@ func is_lumen(p: Vector2) -> bool:
 	return sdf(p) < 0.0
 
 
+# 把「以 center 为中点、沿 axis 铺开、半长 half」的一条直线段裁进可通行区。
+# 阻隔带用它：带子两端不许插进肉壁，所以实际长度可能比 half*2 短。
+#
+# 返回 {a, b, len, trim, ok}
+#   ok=false  = 中心点本身在肉壁里（调用方应先把中心点拉出来）
+#   trim      = 被肉壁吃掉的总长度（0 表示整条都放得下，可以给玩家「被截断」的提示）
+func clip_span(center: Vector2, axis: Vector2, half: float, step: float = 8.0) -> Dictionary:
+	var out := {"a": center, "b": center, "len": 0.0, "trim": half * 2.0, "ok": false}
+	if half <= 0.0:
+		return out
+	var dir := axis.normalized()
+	if dir.length_squared() < 0.0001 or solid_point(center):
+		return out
+	var pos_len := _ray_free(center, dir, half, step)
+	var neg_len := _ray_free(center, -dir, half, step)
+	# 栅格是 8px 一个样本，遇到极薄的褶皱（两条边界相切处的细脖子）会漏一格；
+	# 这里再用「轮廓段精确判定」复核一次：只要中心到端点真的穿墙，就一点点收回来。
+	# 每次调用最多几次 blocked()，只在落位/预览时发生，不进主循环。
+	while pos_len > 0.0 and blocked(center, center + dir * pos_len):
+		pos_len = maxf(0.0, pos_len - step)
+	while neg_len > 0.0 and blocked(center, center - dir * neg_len):
+		neg_len = maxf(0.0, neg_len - step)
+	var a: Vector2 = center + dir * pos_len
+	var b: Vector2 = center - dir * neg_len
+	var total := pos_len + neg_len
+	out["a"] = a
+	out["b"] = b
+	out["len"] = total
+	out["trim"] = half * 2.0 - total
+	out["ok"] = total > 0.0
+	return out
+
+
+# 从 origin 沿 dir 走 max_len，返回「还能走多远」：撞上实心格就停。
+# 最后一步允许不足 step，所以全空时正好返回 max_len。
+func _ray_free(origin: Vector2, dir: Vector2, max_len: float, step: float) -> float:
+	var travelled := 0.0
+	while travelled < max_len:
+		var nxt := minf(step, max_len - travelled)
+		if solid_point(origin + dir * (travelled + nxt)):
+			break
+		travelled += nxt
+	return travelled
+
+
 # 往最近的可通行点吸附（跳跃链落进组织时用）
 func nearest_free(p: Vector2, max_r: float) -> Vector2:
 	if not solid_point(p):
