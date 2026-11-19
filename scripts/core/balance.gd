@@ -37,6 +37,9 @@ const VIRUS_CAP_INIT := 16384      # 初始池容量（纯内存预留，不是�
 const VIRUS_GROW_STEP := 8192      # 一次扩容加多少槽（不够会按 1.4 倍继续加）
 const VIRUS_MAX_CORPSE := 3600     # 尸体（视觉预算）上限；超了丢最老的一颗
 const VIRUS_WORK_BUDGET := 600     # 每帧至少要扫多少个槽（池越大自动按 n/8 上调）
+const VIRUS_SWEEP_MS := 2.5        # 每帧病毒模拟的时间上限（毫秒）。数量闸 + 时间闸双保险：
+                                   # 粒子到几万颗时按数量分预算仍会到 5~7ms/帧，这里到点就停，
+                                   # 剩下的下一帧接着扫。调大=扩散更及时但更容易掉帧
 const VIRUS_SPAWN_BUDGET := 320    # 每帧最多提交多少个新粒子：超过就推到下一帧，
                                    # 这是「几万颗也不掉帧」的关键闸门（调低=更稳但扩散稍慢）
 const VIRUS_QUERY_BUDGET := 512    # 净化/拾取每次最多扫多少个槽（游标轮转，不会漏太久）

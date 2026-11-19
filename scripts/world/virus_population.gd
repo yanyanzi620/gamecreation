@@ -42,6 +42,7 @@ const CAP_INIT := Balance.VIRUS_CAP_INIT
 const GROW_STEP := Balance.VIRUS_GROW_STEP
 const MAX_CORPSE := Balance.VIRUS_MAX_CORPSE
 const WORK_BUDGET := Balance.VIRUS_WORK_BUDGET
+const SWEEP_MS := Balance.VIRUS_SWEEP_MS
 const SPAWN_BUDGET := Balance.VIRUS_SPAWN_BUDGET
 const QUERY_BUDGET := Balance.VIRUS_QUERY_BUDGET
 
@@ -319,6 +320,7 @@ func reset() -> void:
 	_buf.fill(0.0)
 	if _mmi != null:
 		_mmi.multimesh.buffer = _buf
+		_mmi.multimesh.visible_instance_count = 0
 	_n_live = 0
 	_n_corpse = 0
 	_kind_live.fill(0)
@@ -504,13 +506,18 @@ func tick(dt: float) -> void:
 	if _dirty:
 		var t1 := Time.get_ticks_usec() if prof_enabled else 0
 		_mmi.multimesh.buffer = _buf
+		# 只渲染 0.._n-1 这些真的在用的槽：池按 8192 步扩容，capacity 常远大于实际粒子数，
+		# 让渲染器去处理几万个 scale=0 的实例是白给的开销。
+		_mmi.multimesh.visible_instance_count = _n
 		_dirty = false
 		if prof_enabled:
 			prof_upload_us += Time.get_ticks_usec() - t1
 
 
 # 每帧只处理「预算内的槽」：不管池里有多少颗，单帧开销都有上限。
-# 轮转游标保证被跳过的粒子只是把动作推到下一轮，逻辑不会错、也不会漏。
+# 两道闸门：数量闸（最多扫 budget 个槽）+ 时间闸（最多花 VIRUS_SWEEP_MS 毫秒）。
+# 时间闸是最后一道保险：粒子数爆到几万时，光按数量分预算仍会顶到 5~7ms/帧，
+# 再加渲染就是用户能感觉到的掉帧；到点直接停，剩下的下一帧接着扫（游标不会丢）。
 func _sweep() -> void:
 	if _n <= 0:
 		_cur = 0
@@ -518,7 +525,10 @@ func _sweep() -> void:
 	var budget := clampi(_n / 8, WORK_BUDGET, WORK_BUDGET * 6)
 	var spawns := SPAWN_BUDGET
 	var visited := 0
+	var deadline := Time.get_ticks_usec() + int(SWEEP_MS * 1000.0)
 	while visited < budget and _n > 0:
+		if (visited & 15) == 0 and Time.get_ticks_usec() > deadline:
+			break
 		if _cur >= _n:
 			_cur = 0
 		var i := _cur
@@ -681,9 +691,10 @@ func _do_spawn(i: int, bx: float, by: float, kind: int, cap: int, far: bool) -> 
 		_due[i] = _now + _rng.randf_range(COOL_MIN, COOL_MAX)
 		return 0
 	# 阻隔带：生效后不许穿过；闪烁期内穿过去只会被减速
-	# 跳跃链例外 —— 它是空中落点，不沿地面走，所以直接无视封堵
+	# 跳跃链默认例外 —— 它是空中落点，不沿地面走，所以直接无视封堵
+	# （这条也是后台开关 Toggles.CHAIN_IGNORES_BLOCK，默认开）
 	var bc := 0
-	if kind != KIND_CHAIN:
+	if kind != KIND_CHAIN or not Toggles.CHAIN_IGNORES_BLOCK:
 		bc = _block_cross(_px[i], _py[i], nx, ny)
 		if bc == 1:
 			_due[i] = _now + _rng.randf_range(COOL_MIN, COOL_MAX)
@@ -702,9 +713,6 @@ func _do_spawn(i: int, bx: float, by: float, kind: int, cap: int, far: bool) -> 
 	return 1 if child >= 0 else 0
 
 # 一次没长成时的短暂重试间隔（远小于代际冷却）
-	return 1 if child >= 0 else 0
-
-
 func _retry_cool() -> float:
 	return _rng.randf_range(RETRY_MIN, RETRY_MAX)
 
@@ -810,11 +818,13 @@ func _fan_rays(origin: Vector2, dir: Vector2, length: float, half_angle: float) 
 				reach = minf(lo + JET_WALL_SKIN, length)
 				break
 			t = minf(t + step, length)
-		# 阻隔带也挡射线：带子是一道墙，射流打在上面就停（闪烁期穿过，与「生效前穿越只减速」一致）
-		var band_t := _band_reach(origin, d, reach)
-		if band_t < reach:
-			reach = band_t
-			fan_band_clips += 1
+		# 阻隔带挡不挡射线，由后台开关决定（Toggles.JET_BLOCKED_BY_BAND）。
+		# 默认放过：带子拦病毒就够强了，再拦自己的弹道容易把玩家一起封死。
+		if Toggles.JET_BLOCKED_BY_BAND:
+			var band_t := _band_reach(origin, d, reach)
+			if band_t < reach:
+				reach = band_t
+				fan_band_clips += 1
 		rays[r] = reach
 		shape.append(origin + d * reach)
 	fan_shape = shape
