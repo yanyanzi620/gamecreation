@@ -72,6 +72,15 @@ const BLK_OFFSET := 140.0       # 从单元朝向前方多远处落下
 const BLK_SLACK := 12.0         # 端点容差
 const BLK_STATE_ARM := 0
 const BLK_STATE_ON := 1
+
+# ------------------------------------------------------------ 引信
+# 空格放一个引信：小圈里的圆盘/带状直接消融，
+# 大圈里的跳跃链被逐帧拽向小圈，进圈即灭。
+const FUSE_KILL := 85.0        # 小范围：圆盘 / 带状直接消融
+const FUSE_PULL := 300.0       # 更大的范围：只对跳跃链生效，往中心拽
+const FUSE_SPEED := 250.0      # 被拽的速度 px/s
+const FUSE_LIFE := 3.0         # 引信维持多久
+const MAX_FUSE := 3
 const AXIS_WANDER := 0.07       # 每次繁殖让主轴折一次的概率
 const WANDER_DEG_BAND := 20.0
 
@@ -112,6 +121,7 @@ var _mmi: MultiMeshInstance2D
 var _buf := PackedFloat32Array()
 var _dirty := true
 var _blk: Array = []
+var _fuse: Array = []
 
 func _ready() -> void:
 	_rng.seed = 20261119
@@ -331,6 +341,7 @@ func _dir_weight(kind: int, axis: float, ang: float) -> float:
 
 func tick(dt: float) -> void:
 	_tick_blocks(dt)
+	_tick_fuses(dt)
 	for i in range(TOTAL):
 		if _alive[i] == 0:
 			continue
@@ -553,6 +564,61 @@ func harvest_circle(center: Vector2, radius: float, max_n: int) -> int:
 	return got
 
 # ============================================================ 阻隔带
+func add_fuse(center: Vector2) -> bool:
+	if _fuse.size() >= MAX_FUSE:
+		return false
+	_fuse.append({"c": center, "t": 0.0})
+	queue_redraw()
+	return true
+
+
+func fuse_count() -> int:
+	return _fuse.size()
+
+
+func _tick_fuses(dt: float) -> void:
+	if _fuse.is_empty():
+		return
+	var kill2 := FUSE_KILL * FUSE_KILL
+	var pull2 := FUSE_PULL * FUSE_PULL
+	var keep: Array = []
+	for f in _fuse:
+		f["t"] += dt
+		var c: Vector2 = f["c"]
+		for i in range(TOTAL):
+			if _alive[i] == 0 or _ptype[i] != 0:
+				continue
+			var vx := _px[i] - c.x
+			var vy := _py[i] - c.y
+			var l2 := vx * vx + vy * vy
+			if l2 <= kill2:
+				_to_corpse(i)        # 小圈：圆盘/带状/链，一律消融
+				continue
+			if _pkind[i] == KIND_CHAIN and l2 <= pull2:
+				_drag_chain(i, c, dt)
+		if f["t"] < FUSE_LIFE:
+			keep.append(f)
+	_fuse = keep
+	queue_redraw()
+
+
+# 把一颗链粒子往引信拽一步（要同步维护粗格占用）
+func _drag_chain(i: int, toward: Vector2, dt: float) -> void:
+	var dx := toward.x - _px[i]
+	var dy := toward.y - _py[i]
+	var l := sqrt(dx * dx + dy * dy)
+	if l < 1.0:
+		return
+	var step := FUSE_SPEED * dt
+	if step > l:
+		step = l
+	_cell_remove(_px[i], _py[i])
+	_px[i] += dx / l * step
+	_py[i] += dy / l * step
+	_cell_add(_px[i], _py[i])
+	_write_slot(i)
+
+
 # 规则
 #   · 只能落在单元朝前的正前方，不吸附、不拖拽
 #   · 固定长度，释放后先闪烁 BLK_ARM 秒才生效
@@ -636,6 +702,17 @@ func _draw() -> void:
 			var blink := 0.35 + 0.65 * absf(sin(bt * 26.0))
 			draw_line(a, b, Color(1.0, 0.86, 0.35, 0.90 * blink), 2.0)
 			draw_line(a, b, Color(1.0, 0.86, 0.35, 0.20 * blink), 12.0)
+	
+	for f in _fuse:
+		var c: Vector2 = f["c"]
+		var life: float = 1.0 - f["t"] / FUSE_LIFE
+		var pulse := 0.55 + 0.45 * absf(sin(f["t"] * 9.0))
+		# 外圈：只吸引链条的「引力圈」
+		draw_arc(c, FUSE_PULL, 0.0, TAU, 48, Color(0.86, 0.42, 0.95, (0.12 + 0.20 * pulse) * life), 1.5)
+		# 内圈：真正的杀伤范围
+		draw_circle(c, FUSE_KILL, Color(0.95, 0.55, 0.30, 0.10 + 0.10 * pulse))
+		draw_arc(c, FUSE_KILL, 0.0, TAU, 40, Color(1.0, 0.72, 0.36, 0.55 + 0.35 * pulse), 2.5)
+		draw_circle(c, 6.0, Color(1.0, 0.90, 0.60, 0.95))
 
 # ============================================================ 渲染
 

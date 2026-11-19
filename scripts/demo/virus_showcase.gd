@@ -21,6 +21,9 @@ const SPEED := 320.0
 const PLAYER_R := 22.0
 const BLK_CD := 0.20
 const BLK_COST := 30
+const FUSE_COST := 40
+const FUSE_CD := 5.0
+const FUSE_OFFSET := 180.0
 
 var player := Vector2(900.0, 450.0)
 var mouse := Vector2(1120.0, 300.0)
@@ -31,6 +34,7 @@ var aura
 
 var _acc := 0.0
 var _blk_cd := 0.0
+var _fuse_cd := 0.0
 var _hud: Label
 var _hud2: Label
 var _bar: ColorRect
@@ -97,7 +101,7 @@ func _ready() -> void:
 	_hint.position = Vector2(18, 136)
 	_hint.add_theme_font_size_override("font_size", 13)
 	_hint.add_theme_color_override("font_color", Color(0.60, 0.68, 0.64))
-	_hint.text = "WASD 移动 · 左键 = 射流(0.5s) · 右键单点 = 阻隔带（30 养分） · 拾取半径 200"
+	_hint.text = "WASD 移动 · 左键 = 射流 · 右键 = 阻隔带(30) · 空格 = 引信(40)"
 	layer.add_child(_hint)
 
 	if _shot:
@@ -114,8 +118,15 @@ func _sequence() -> void:
 	_fire(Vector2(1120.0, 300.0))
 	await get_tree().create_timer(0.85).timeout
 	_save("res://shot_a.png")
-	await get_tree().create_timer(4.20).timeout
+	await get_tree().create_timer(0.80).timeout
+	# 验收用：直接把引信丢进链条区域（正常玩法里它只能落在单元正前方 180）
+	pop.add_fuse(Vector2(690.0, 690.0))
+	await get_tree().create_timer(2.20).timeout
 	_save("res://shot_b.png")
+	# 再丢一枚进圆盘病毒内部，验证「小圈直接消融」也能作用于盘/带
+	pop.add_fuse(Vector2(1120.0, 320.0))
+	await get_tree().create_timer(1.10).timeout
+	_save("res://shot_c.png")
 	get_tree().quit()
 
 
@@ -124,10 +135,23 @@ func _save(path: String) -> void:
 	var p := ProjectSettings.globalize_path(path)
 	img.save_png(p)
 	print("[SHOT] ", p)
-	print("[STAT] sim=%.2f frames=%d live=%d corpse=%d nut=%d picked=%d hit=%d" % [
+	print("[STAT] sim=%.2f frames=%d live=%d corpse=%d nut=%d picked=%d hit=%d fuse=%d chain=%d" % [
 		_sim, _frames, pop.live_count(), pop.corpse_count(), aura.nutrient,
-		aura.picked, jet.last_hit()
+		aura.picked, jet.last_hit(), pop.fuse_count(), pop.live_by_kind(KIND_CHAIN)
 	])
+
+
+func _place_fuse(target: Vector2) -> bool:
+	if _fuse_cd > 0.0 or aura.nutrient < FUSE_COST:
+		return false
+	var d := target - player
+	if d.length() < 1.0:
+		d = Vector2.RIGHT
+	if not pop.add_fuse(player + d.normalized() * FUSE_OFFSET):
+		return false
+	aura.nutrient -= FUSE_COST
+	_fuse_cd = FUSE_CD
+	return true
 
 
 func _place_block(target: Vector2) -> bool:
@@ -150,6 +174,11 @@ func _fire(target: Vector2) -> int:
 # 鼠标一律走事件，按下这一下就判定：
 # 轮询式检测会漏掉「按下+抬起发生在同一帧」的快速点击
 func _unhandled_input(e: InputEvent) -> void:
+	if e is InputEventKey:
+		var k := e as InputEventKey
+		if k.pressed and not k.echo and k.keycode == KEY_SPACE:
+			_place_fuse(get_global_mouse_position())
+		return
 	if not (e is InputEventMouseButton):
 		return
 	var mb := e as InputEventMouseButton
@@ -182,6 +211,8 @@ func _process(delta: float) -> void:
 
 	if _blk_cd > 0.0:
 		_blk_cd = maxf(0.0, _blk_cd - delta)
+	if _fuse_cd > 0.0:
+		_fuse_cd = maxf(0.0, _fuse_cd - delta)
 
 
 
@@ -209,8 +240,9 @@ func _process(delta: float) -> void:
 		pop.live_by_kind(KIND_CHAIN),
 		pop.corpse_count(), float(_tick_us) / 1000.0, int(ratio * 100.0)
 	]
-	_hud2.text = "养分 %d   已拾取 %d   射流命中 %d   阻隔带 %d(耗 %d)   下道冷却 %.2fs" % [
-		aura.nutrient, aura.picked, jet.last_hit(), pop.block_count(), BLK_COST, _blk_cd
+	_hud2.text = "养分 %d   已拾 %d   命中 %d   带 %d   引信 %d   冷却 带%.1fs / 信%.1fs" % [
+		aura.nutrient, aura.picked, jet.last_hit(), pop.block_count(),
+		pop.fuse_count(), _fuse_cd, _blk_cd
 	]
 	queue_redraw()
 
