@@ -639,9 +639,17 @@ func place_block(origin: Vector2, dir: Vector2) -> bool:
 	var perp := Vector2(-d.y, d.x)
 	var a := c - perp * half
 	var b := c + perp * half
-	_blk.append({"a": a, "b": b, "n": perp, "t": 0.0, "state": BLK_STATE_ARM})
+	# 注意：a/b 是沿带子长度方向铺开的，所以带子的「法线」是 d，不是 perp
+	# 之前这里存成了 perp，导致相交判定算的是「沿带子方向」的坐标，
+	# 两侧的点会得到同一个值 -> 永远判不出穿越 -> 阻隔带一直没真正生效
+	_blk.append({"a": a, "b": b, "n": d, "t": 0.0, "state": BLK_STATE_ARM})
 	queue_redraw()
 	return true
+
+# 玩家移动用：只有「已生效」的阻隔带才拦人，闪烁期两者都能穿过去
+func path_blocked(a: Vector2, b: Vector2) -> bool:
+	return _block_cross(a.x, a.y, b.x, b.y) == 1
+
 
 func _tick_blocks(dt: float) -> void:
 	if _blk.is_empty():

@@ -127,6 +127,12 @@ func _sequence() -> void:
 	pop.add_fuse(Vector2(1120.0, 320.0))
 	await get_tree().create_timer(1.10).timeout
 	_save("res://shot_c.png")
+	# 再验一次：往阻挡带方向硬走 3 秒，看玩家是不是被挡住
+	for i in range(180):
+		_move_step(Vector2(1.0, -0.30), 1.0 / 60.0)
+	print("[MOVE] player=(%.1f, %.1f)" % [player.x, player.y])
+	await get_tree().create_timer(0.10).timeout
+	_save("res://shot_d.png")
 	get_tree().quit()
 
 
@@ -193,6 +199,22 @@ func _unhandled_input(e: InputEvent) -> void:
 				_blk_cd = BLK_CD
 
 
+func _move_step(dir: Vector2, delta: float) -> void:
+	if dir.length() < 0.001:
+		return
+	var step := dir.normalized() * SPEED * delta
+	var np := player + step
+	if not pop.path_blocked(player, np):
+		player = np
+		return
+	# 撞上已生效的阻隔带：只走分量大的那一个轴，沿带子滑过去
+	if absf(step.x) >= absf(step.y):
+		if not pop.path_blocked(player, player + Vector2(step.x, 0.0)):
+			player += Vector2(step.x, 0.0)
+	elif not pop.path_blocked(player, player + Vector2(0.0, step.y)):
+		player += Vector2(0.0, step.y)
+
+
 func _process(delta: float) -> void:
 	_frames += 1
 	var mv := Vector2.ZERO
@@ -204,8 +226,7 @@ func _process(delta: float) -> void:
 		mv.y -= 1.0
 	if Input.is_key_pressed(KEY_S):
 		mv.y += 1.0
-	if mv.length() > 0.0:
-		player += mv.normalized() * SPEED * delta
+	_move_step(mv, delta)
 
 	mouse = get_global_mouse_position()
 
