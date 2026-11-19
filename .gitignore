@@ -75,3 +75,10 @@ probe_mask.png.import
 probe_big.png
 probe_big.png.importoverview.png
 minimap_zoom.png
+# 验收截图不进仓库
+overview.png
+main_shot_a.png
+main_shot_b.png
+probe_big.png
+minimap_zoom.png
+*.import
