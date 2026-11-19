@@ -7,7 +7,7 @@ extends Node2D
 #
 #   KIND_BLOB  圆周    各向同性，长成不规则圆盘
 #   KIND_BAND  带状    主轴优先，主轴缓慢折线，长成条带
-#   KIND_CHAIN 跳跃链  单轴强推 + 定期跳跃，长成断续的链/枝
+#   KIND_CHAIN 跳跃链  单点传播：往前方扇形里随机落点，无视阻隔带
 #
 # 生长机制（三条铁律）
 #   1. 复制式扩张：冷却结束后「生一个新粒子」，本体不变大
@@ -32,13 +32,13 @@ const KIND_CHAIN := 2
 const KIND_COUNT := 3
 
 # 每格容量：圆盘最密，条带中等，链最瘦
-const CAP_BLOB := 7
-const CAP_BAND := 4
-const CAP_CHAIN := 3
+const CAP_BLOB := 10
+const CAP_BAND := 6
+const CAP_CHAIN := 2
 
 # ------------------------------------------------------------ 池
-const MAX_LIVE := 4200
-const MAX_CORPSE := 1200
+const MAX_LIVE := 6000
+const MAX_CORPSE := 1800
 const TOTAL := MAX_LIVE + MAX_CORPSE
 
 # ------------------------------------------------------------ 空间
@@ -52,15 +52,17 @@ const ARENA_PAD := 30.0
 # ------------------------------------------------------------ 生长
 const R_MIN := 4.5
 const R_MAX := 8.0
-const COOL_MIN := 1.00
-const COOL_MAX := 2.00
-const SPAWN_D_MIN := 16.0
-const SPAWN_D_MAX := 30.0
-const STEP_MIN_CHAIN := 32.0     # 链的步长：粒子之间留出可见的空档
-const STEP_MAX_CHAIN := 52.0
+const COOL_MIN := 0.80
+const COOL_MAX := 1.55
+const SPAWN_D_MIN := 14.0
+const SPAWN_D_MAX := 26.0
 const PROBE_DIST := 30.0        # 探一格
-const JUMP_DIST := 112.0         # 跳跃链的跳跃距离（约 2.6 格）
-const JUMP_CHANCE := 0.85       # 前进方向被堵死时，尝试跳跃的概率
+
+# 跳跃链 = 单点传播：不粘连、不稳方向，只保证「整体往前推」
+# 每次繁殖在空中随机落一个点，点与点之间天然留空，视觉上不会糊成条带
+const CHAIN_SPREAD_DEG := 38.0   # 落点相对主轴的最大偏角
+const CHAIN_STEP_MIN := 95.0     # 落点距离
+const CHAIN_STEP_MAX := 190.0
 
 # ------------------------------------------------------------ 阻隔带
 const BLK_ARM := 0.45           # 释放后闪烁多久才生效
@@ -72,8 +74,6 @@ const BLK_STATE_ARM := 0
 const BLK_STATE_ON := 1
 const AXIS_WANDER := 0.07       # 每次繁殖让主轴折一次的概率
 const WANDER_DEG_BAND := 20.0
-const WANDER_DEG_CHAIN := 8.0
-const WANDER_CHANCE_CHAIN := 0.12
 
 const YOUNG_SEC := 2.0
 const DRIFT_SPEED := 24.0
@@ -113,12 +113,10 @@ var _buf := PackedFloat32Array()
 var _dirty := true
 var _blk: Array = []
 
-
 func _ready() -> void:
 	_rng.seed = 20261119
 	_init_pool()
 	_init_multimesh()
-
 
 func _init_pool() -> void:
 	_px.resize(TOTAL)
@@ -143,7 +141,6 @@ func _init_pool() -> void:
 	_buf.resize(TOTAL * 12)
 	_buf.fill(0.0)
 
-
 func _init_multimesh() -> void:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_2D
@@ -160,7 +157,6 @@ func _init_multimesh() -> void:
 	_mmi.texture = _make_dot_texture()
 	add_child(_mmi)
 
-
 func _make_dot_texture() -> ImageTexture:
 	var s := 32
 	var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
@@ -174,7 +170,6 @@ func _make_dot_texture() -> ImageTexture:
 			a = a * a
 			img.set_pixel(x, y, Color(1.0, 1.0, 1.0, a))
 	return ImageTexture.create_from_image(img)
-
 
 # ============================================================ 播种
 
@@ -194,10 +189,8 @@ func spawn_virus(kind: int, center: Vector2, a: float, b: float, count: int, axi
 			_rng.randf_range(0.0, 1.2), _rng.randf_range(COOL_MIN, COOL_MAX))
 	return vid
 
-
 func seed_blob(center: Vector2, radius: float, count: int) -> int:
 	return spawn_virus(KIND_BLOB, center, radius, radius, count, 0.0)
-
 
 func _seed_point(kind: int, center: Vector2, a: float, b: float, axis: float) -> Vector2:
 	var ax := Vector2(cos(axis), sin(axis))
@@ -207,34 +200,27 @@ func _seed_point(kind: int, center: Vector2, a: float, b: float, axis: float) ->
 		var v := _rng.randf_range(-b, b)
 		return center + ax * u + pp * v
 	if kind == KIND_CHAIN:
-		var beads := 4
-		var bi := _rng.randi_range(0, beads - 1)
-		var off := (float(bi) - float(beads - 1) * 0.5) * b
+		# 跳跃链的种子就是一小撮点，之后靠「单点传播」往前散开
 		var ang := _rng.randf() * TAU
 		var rr := a * sqrt(_rng.randf())
-		return center + ax * off + Vector2(cos(ang), sin(ang)) * rr
+		return center + Vector2(cos(ang), sin(ang)) * rr
 	var ang2 := _rng.randf() * TAU
 	var rr2 := a * sqrt(_rng.randf())
 	return center + Vector2(cos(ang2), sin(ang2)) * rr2
-
 
 # ============================================================ 查询
 
 func live_count() -> int:
 	return _n_live
 
-
 func corpse_count() -> int:
 	return _n_corpse
-
 
 func live_by_kind(kind: int) -> int:
 	return _kind_live[kind]
 
-
 func arena_size() -> Vector2:
 	return Vector2(ARENA_W, ARENA_H)
-
 
 # ============================================================ 池操作
 
@@ -268,7 +254,6 @@ func _spawn(x: float, y: float, r: float, type: int, kind: int, axis: float,
 	_dirty = true
 	return i
 
-
 func _kill(i: int) -> void:
 	if _alive[i] == 0:
 		return
@@ -283,7 +268,6 @@ func _kill(i: int) -> void:
 	_write_slot(i)
 	_dirty = true
 
-
 func _to_corpse(i: int) -> void:
 	if _alive[i] == 0 or _ptype[i] != 0:
 		return
@@ -297,7 +281,6 @@ func _to_corpse(i: int) -> void:
 	_write_slot(i)
 	_dirty = true
 
-
 # ============================================================ 粗格
 
 func _cell_idx(x: float, y: float) -> int:
@@ -305,20 +288,16 @@ func _cell_idx(x: float, y: float) -> int:
 	var cy := int(clampf(y / CELL, 0.0, GRID_H - 1.0))
 	return cy * GRID_W + cx
 
-
 func _cell_add(x: float, y: float) -> void:
 	_cell[_cell_idx(x, y)] += 1
-
 
 func _cell_remove(x: float, y: float) -> void:
 	var idx := _cell_idx(x, y)
 	if _cell[idx] > 0:
 		_cell[idx] -= 1
 
-
 func _cell_count(x: float, y: float) -> int:
 	return _cell[_cell_idx(x, y)]
-
 
 func _cell_cap(kind: int) -> int:
 	if kind == KIND_BAND:
@@ -326,7 +305,6 @@ func _cell_cap(kind: int) -> int:
 	if kind == KIND_CHAIN:
 		return CAP_CHAIN
 	return CAP_BLOB
-
 
 # ============================================================ 方向权重
 # 这个函数决定「长成什么形状」。score = 权重 × 剩余容量，
@@ -346,14 +324,8 @@ func _dir_weight(kind: int, axis: float, ang: float) -> float:
 		if diff <= PI * 0.50:
 			return 0.5          # 侧向
 		return 0.30             # 反方向：只用于回填
-	if kind == KIND_CHAIN:
-		if diff <= PI * 0.13:
-			return 10.0         # 正前方：单线，几乎不分叉
-		if diff <= PI * 0.30:
-			return 0.10
-		return 0.04             # 反向：只用于回填
-	return 1.0                  # BLOB：各向同性
 
+	return 1.0                  # BLOB：各向同性
 
 # ============================================================ 模拟
 
@@ -378,7 +350,6 @@ func tick(dt: float) -> void:
 		_mmi.multimesh.buffer = _buf
 		_dirty = false
 
-
 func _replicate(i: int) -> void:
 	if _n_live >= MAX_LIVE:
 		return
@@ -387,28 +358,15 @@ func _replicate(i: int) -> void:
 	var axis := _pax[i]
 	var cap := _cell_cap(kind)
 
-	# 跳跃链：只认正前方 ±23°。前方堵死就跳一段；跳跃失败才允许回填。
-	# 这个分支是「链」和「糊成一团」的唯一差别。
+	# 跳跃链 = 单点传播：往前方扇形里随机落一个点，隔着阻隔带也照样落
 	if kind == KIND_CHAIN:
-		var fwd := _pick_dir(i, kind, axis, cap, PI * 0.13)
-		if fwd[3]:
-			_do_spawn(i, fwd[1], fwd[2], kind, cap)
-			return
-		if _rng.randf() < JUMP_CHANCE and _try_jump(i, axis):
-			return
-		var anyd := _pick_dir(i, kind, axis, cap, PI)
-		if anyd[3]:
-			_do_spawn(i, anyd[1], anyd[2], kind, cap)
-			return
-		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
+		_chain_spread(i, axis)
 		return
-
 	var best := _pick_dir(i, kind, axis, cap, PI)
 	if not best[3]:
 		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
 		return
 	_do_spawn(i, best[1], best[2], kind, cap)
-
 
 # 在 max_diff 夹角范围内，挑「权重 × 剩余容量」最大的方向
 # 返回 [score, dx, dy, found]
@@ -445,6 +403,24 @@ func _pick_dir(i: int, kind: int, axis: float, cap: int, max_diff: float) -> Arr
 			by = dy
 	return [best, bx, by, found]
 
+func _chain_spread(i: int, axis: float) -> void:
+	# 往主轴前方 ±CHAIN_SPREAD_DEG 的扇形里随机落一个点。
+	# 不沿地面走 -> 阻隔带栏不住（这是它和带状病毒最大的区别）；
+	# 点与点之间天然留空 -> 不会糊成条带。
+	var ang := axis + deg_to_rad(_rng.randf_range(-CHAIN_SPREAD_DEG, CHAIN_SPREAD_DEG))
+	var dist := _rng.randf_range(CHAIN_STEP_MIN, CHAIN_STEP_MAX)
+	var nx := _px[i] + cos(ang) * dist
+	var ny := _py[i] + sin(ang) * dist
+	if nx < ARENA_PAD or nx > ARENA_W - ARENA_PAD or ny < ARENA_PAD or ny > ARENA_H - ARENA_PAD:
+		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
+		return
+	if _cell_count(nx, ny) >= CAP_CHAIN:
+		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
+		return
+	var naxis := axis + deg_to_rad(_rng.randf_range(-14.0, 14.0))
+	_spawn(nx, ny, _rng.randf_range(R_MIN, R_MAX), 0, KIND_CHAIN, naxis,
+		_pvid[i], 0.0, _rng.randf_range(COOL_MIN, COOL_MAX))
+	_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
 
 # 真正落一个子粒子：抖动角度 + 随机步长 + 主轴缓慢折线
 func _do_spawn(i: int, bx: float, by: float, kind: int, cap: int) -> void:
@@ -452,9 +428,6 @@ func _do_spawn(i: int, bx: float, by: float, kind: int, cap: int) -> void:
 	var nd := Vector2(bx, by).rotated(jitter)
 	var smin := SPAWN_D_MIN
 	var smax := SPAWN_D_MAX
-	if kind == KIND_CHAIN:
-		smin = STEP_MIN_CHAIN
-		smax = STEP_MAX_CHAIN
 	var dist := _rng.randf_range(smin, smax)
 	var nx := _px[i] + nd.x * dist
 	var ny := _py[i] + nd.y * dist
@@ -465,46 +438,29 @@ func _do_spawn(i: int, bx: float, by: float, kind: int, cap: int) -> void:
 		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
 		return
 	# 阻隔带：生效后不许穿过；闪烁期内穿过去只会被减速
-	var bc := _block_cross(_px[i], _py[i], nx, ny)
-	if bc == 1:
-		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
-		return
+	# 跳跃链例外 —— 它是空中落点，不沿地面走，所以直接无视封堵
+	var bc := 0
+	if kind != KIND_CHAIN:
+		bc = _block_cross(_px[i], _py[i], nx, ny)
+		if bc == 1:
+			_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
+			return
 	var cool_pen := 2.4 if bc == 2 else 1.0
 
+	# 只有带状会缓慢折线（圆盘各向同性，链走的是 _chain_spread）
 	var naxis := _pax[i]
-	if kind != KIND_BLOB:
-		var chance := AXIS_WANDER if kind == KIND_BAND else WANDER_CHANCE_CHAIN
-		if _rng.randf() < chance:
-			var wd := WANDER_DEG_BAND if kind == KIND_BAND else WANDER_DEG_CHAIN
-			naxis = _pax[i] + deg_to_rad(_rng.randf_range(-wd, wd))
+	if kind == KIND_BAND and _rng.randf() < AXIS_WANDER:
+		naxis = _pax[i] + deg_to_rad(_rng.randf_range(-WANDER_DEG_BAND, WANDER_DEG_BAND))
 
 	_spawn(nx, ny, _rng.randf_range(R_MIN, R_MAX), 0, kind, naxis, _pvid[i],
 		0.0, _rng.randf_range(COOL_MIN, COOL_MAX) * cool_pen)
 	_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
-
 
 func _ang_diff(a: float, b: float) -> float:
 	var d := fmod(a - b + PI, TAU)
 	if d < 0.0:
 		d += TAU
 	return absf(d - PI)
-
-
-# 跳跃：沿主轴跳过一段已经长满的区域，在对面重新落点
-func _try_jump(i: int, axis: float) -> bool:
-	var jx := _px[i] + cos(axis) * JUMP_DIST
-	var jy := _py[i] + sin(axis) * JUMP_DIST
-	if jx < ARENA_PAD or jx > ARENA_W - ARENA_PAD or jy < ARENA_PAD or jy > ARENA_H - ARENA_PAD:
-		return false
-	if _cell_count(jx, jy) >= _cell_cap(KIND_CHAIN):
-		return false
-	if _block_cross(_px[i], _py[i], jx, jy) == 1:
-		return false
-	_spawn(jx, jy, _rng.randf_range(R_MIN, R_MAX), 0, KIND_CHAIN, axis, _pvid[i],
-		0.0, _rng.randf_range(COOL_MIN, COOL_MAX))
-	_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
-	return true
-
 
 # ============================================================ 消除
 
@@ -534,7 +490,6 @@ func clear_fan(origin: Vector2, dir: Vector2, length: float, half_angle: float) 
 		hit += 1
 	return hit
 
-
 # 净化场：圆形范围内按数量配额逐帧清除（接触即消融）
 func purge_circle(center: Vector2, radius: float, max_n: int) -> int:
 	if max_n <= 0:
@@ -553,7 +508,6 @@ func purge_circle(center: Vector2, radius: float, max_n: int) -> int:
 		_to_corpse(i)
 		hit += 1
 	return hit
-
 
 # 自动拾取用：吃掉范围内躺够 1 秒的尸体，返回它们的位置（供光点飞行用）
 func take_corpse_near(center: Vector2, radius: float, max_n: int) -> Array:
@@ -575,7 +529,6 @@ func take_corpse_near(center: Vector2, radius: float, max_n: int) -> Array:
 		out.append(Vector2(_px[i], _py[i]))
 		_kill(i)
 	return out
-
 
 # 巨噬细胞回收：吃掉吸附范围内的尸体，换养分
 # 只收割「已经躺了 1 秒以上」的尸体，保证战场还能看到疤
@@ -599,7 +552,6 @@ func harvest_circle(center: Vector2, radius: float, max_n: int) -> int:
 		got += 1
 	return got
 
-
 # ============================================================ 阻隔带
 # 规则
 #   · 只能落在单元朝前的正前方，不吸附、不拖拽
@@ -611,7 +563,6 @@ func harvest_circle(center: Vector2, radius: float, max_n: int) -> int:
 
 func block_count() -> int:
 	return _blk.size()
-
 
 func place_block(origin: Vector2, dir: Vector2) -> bool:
 	var d := dir.normalized()
@@ -625,7 +576,6 @@ func place_block(origin: Vector2, dir: Vector2) -> bool:
 	_blk.append({"a": a, "b": b, "n": perp, "t": 0.0, "state": BLK_STATE_ARM})
 	queue_redraw()
 	return true
-
 
 func _tick_blocks(dt: float) -> void:
 	if _blk.is_empty():
@@ -641,7 +591,6 @@ func _tick_blocks(dt: float) -> void:
 	if keep.size() != _blk.size():
 		_blk = keep
 	queue_redraw()
-
 
 # 线段 (x0,y0)->(x1,y1) 与阻隔带的相交判定
 #   0 = 没穿   1 = 被生效带拦住   2 = 闪烁期内穿过（减速）
@@ -669,7 +618,6 @@ func _block_cross(x0: float, y0: float, x1: float, y1: float) -> int:
 		return 1 if blk["state"] == BLK_STATE_ON else 2
 	return 0
 
-
 func _draw() -> void:
 	for blk in _blk:
 		var a: Vector2 = blk["a"]
@@ -689,7 +637,6 @@ func _draw() -> void:
 			draw_line(a, b, Color(1.0, 0.86, 0.35, 0.90 * blink), 2.0)
 			draw_line(a, b, Color(1.0, 0.86, 0.35, 0.20 * blink), 12.0)
 
-
 # ============================================================ 渲染
 
 func _kind_color(kind: int) -> Color:
@@ -698,7 +645,6 @@ func _kind_color(kind: int) -> Color:
 	if kind == KIND_CHAIN:
 		return COL_CHAIN
 	return COL_BLOB
-
 
 func _write_slot(i: int) -> void:
 	var o := i * 12

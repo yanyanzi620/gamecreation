@@ -10,13 +10,14 @@ extends Node2D
 
 const PURGE_RADIUS := 108.0
 const PURGE_PER_SEC := 55.0
-const PICKUP_RADIUS := 340.0
+const PICKUP_RADIUS := 200.0
 const PICKUP_PER_SEC := 45.0
 const MOTE_SPEED := 460.0
 const MOTE_MAX := 80
 
 var nutrient := 0
 var last_purge := 0
+var picked := 0      # 累计拾取的尸体数（验收用）
 
 var _acc_purge := 0.0
 var _acc_pick := 0.0
@@ -45,14 +46,21 @@ func tick(dt: float, center: Vector2) -> void:
 			_flash = 0.12
 
 	# 2) 自动拾取：把范围内的老尸体变成光点
+	#    关键：先算「还能带几个」，再决定吃几个 ——
+	#    否则尸体已经被从池里删掉、光点却因为满员没生成，养分就被吞掉了
 	_acc_pick += dt * PICKUP_PER_SEC
+	if _acc_pick > float(MOTE_MAX):
+		_acc_pick = float(MOTE_MAX)   # 不攒超过一次能带走的量
 	var m := int(_acc_pick)
-	if m > 0:
-		_acc_pick -= float(m)
+	var room := MOTE_MAX - _motes.size()
+	if room > 0 and m > 0:
+		if m > room:
+			m = room
 		var spots: Array = _pop.take_corpse_near(center, PICKUP_RADIUS, m)
+		_acc_pick -= float(spots.size())
+		picked += spots.size()
 		for s in spots:
-			if _motes.size() < MOTE_MAX:
-				_motes.append(s)
+			_motes.append(s)
 
 	# 3) 光点飞向单元，到了入账
 	var keep: Array = []

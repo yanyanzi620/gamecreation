@@ -19,7 +19,7 @@ const KIND_CHAIN := 2
 const STEP := 1.0 / 60.0
 const SPEED := 320.0
 const PLAYER_R := 22.0
-const BLK_CD := 3.0
+const BLK_CD := 0.20
 const BLK_COST := 30
 
 var player := Vector2(900.0, 450.0)
@@ -30,8 +30,6 @@ var jet
 var aura
 
 var _acc := 0.0
-var _lmb := false
-var _rmb := false
 var _blk_cd := 0.0
 var _hud: Label
 var _hud2: Label
@@ -45,6 +43,10 @@ var _frames := 0
 
 func _ready() -> void:
 	RenderingServer.set_default_clear_color(Color(0.06, 0.08, 0.10))
+	# 窗口失焦 / 长时间无输入时，引擎和系统都可能给画面降频，
+	# 表现就是「画面冻住、动一下鼠标才继续」。这两行是兜底。
+	OS.low_processor_usage_mode = false
+	Engine.max_fps = 0
 	_shot = OS.get_cmdline_user_args().has("--shot")
 
 	pop = load("res://scripts/world/virus_population.gd").new()
@@ -56,7 +58,8 @@ func _ready() -> void:
 	# 带状：半长 185 / 半宽 40，主轴 0.18 弧度
 	pop.spawn_virus(KIND_BAND, Vector2(330.0, 210.0), 200.0, 32.0, 85, 0.08)
 	# 跳跃链：4 颗珠子，珠半径 22，间距 56，主轴 -0.45
-	pop.spawn_virus(KIND_CHAIN, Vector2(240.0, 760.0), 18.0, 70.0, 12, -0.22)
+	# 跳跃链：一小撮种子点，之后靠单点传播往前散成点阵
+	pop.spawn_virus(KIND_CHAIN, Vector2(230.0, 770.0), 26.0, 0.0, 10, -0.35)
 
 	jet = load("res://scripts/units/tools/jet_system.gd").new()
 	jet.name = "Jet"
@@ -94,7 +97,7 @@ func _ready() -> void:
 	_hint.position = Vector2(18, 136)
 	_hint.add_theme_font_size_override("font_size", 13)
 	_hint.add_theme_color_override("font_color", Color(0.60, 0.68, 0.64))
-	_hint.text = "WASD 移动 · 左键 = 射流(0.5s) · 右键 = 阻隔带（消耗 30 养分，尸体自动飞回）"
+	_hint.text = "WASD 移动 · 左键 = 射流(0.5s) · 右键单点 = 阻隔带（30 养分） · 拾取半径 200"
 	layer.add_child(_hint)
 
 	if _shot:
@@ -121,8 +124,9 @@ func _save(path: String) -> void:
 	var p := ProjectSettings.globalize_path(path)
 	img.save_png(p)
 	print("[SHOT] ", p)
-	print("[STAT] sim=%.2f frames=%d live=%d corpse=%d nut=%d hit=%d" % [
-		_sim, _frames, pop.live_count(), pop.corpse_count(), aura.nutrient, jet.last_hit()
+	print("[STAT] sim=%.2f frames=%d live=%d corpse=%d nut=%d picked=%d hit=%d" % [
+		_sim, _frames, pop.live_count(), pop.corpse_count(), aura.nutrient,
+		aura.picked, jet.last_hit()
 	])
 
 
@@ -141,6 +145,23 @@ func _fire(target: Vector2) -> int:
 	if d.length() < 1.0:
 		d = Vector2.RIGHT
 	return jet.fire(player, d)
+
+
+# 鼠标一律走事件，按下这一下就判定：
+# 轮询式检测会漏掉「按下+抬起发生在同一帧」的快速点击
+func _unhandled_input(e: InputEvent) -> void:
+	if not (e is InputEventMouseButton):
+		return
+	var mb := e as InputEventMouseButton
+	if not mb.pressed:
+		return
+	var pos := get_global_mouse_position()
+	if mb.button_index == MOUSE_BUTTON_LEFT:
+		_fire(pos)
+	elif mb.button_index == MOUSE_BUTTON_RIGHT:
+		if _blk_cd <= 0.0:
+			if _place_block(pos):
+				_blk_cd = BLK_CD
 
 
 func _process(delta: float) -> void:
@@ -162,23 +183,11 @@ func _process(delta: float) -> void:
 	if _blk_cd > 0.0:
 		_blk_cd = maxf(0.0, _blk_cd - delta)
 
-	if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-		if not _lmb:
-			_lmb = true
-			_fire(mouse)
-	else:
-		_lmb = false
 
-	if Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
-		if not _rmb:
-			_rmb = true
-			if _blk_cd <= 0.0:
-				_place_block(mouse)
-				_blk_cd = BLK_CD
-	else:
-		_rmb = false
 
 	_acc += delta
+	if _acc > 0.25:
+		_acc = 0.25      # 失焦/卡顿回来后不要疯狂追帧
 	var guard := 0
 	while _acc >= STEP and guard < 8:
 		_acc -= STEP
@@ -200,8 +209,8 @@ func _process(delta: float) -> void:
 		pop.live_by_kind(KIND_CHAIN),
 		pop.corpse_count(), float(_tick_us) / 1000.0, int(ratio * 100.0)
 	]
-	_hud2.text = "养分 %d   射流命中 %d   阻隔带 %d(耗 %d)   下道冷却 %.1fs" % [
-		aura.nutrient, jet.last_hit(), pop.block_count(), BLK_COST, _blk_cd
+	_hud2.text = "养分 %d   已拾取 %d   射流命中 %d   阻隔带 %d(耗 %d)   下道冷却 %.2fs" % [
+		aura.nutrient, aura.picked, jet.last_hit(), pop.block_count(), BLK_COST, _blk_cd
 	]
 	queue_redraw()
 
