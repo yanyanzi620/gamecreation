@@ -634,6 +634,47 @@ func fuse_count() -> int:
 	return _fuse.size()
 
 
+# ============================================================ 小地图数据
+# 把简图要用的东西一次打包：采样点位、左右叶病毒量、阻隔带、引信。
+# 采样是「隔几个取一个」，只为了画点，不改变任何真实数据。
+func minimap_snapshot(max_pts: int) -> Dictionary:
+	var live := PackedVector2Array()
+	var corpse := PackedVector2Array()
+	var left := 0
+	var right := 0
+	var mid := ARENA_W * 0.5
+	var stride_live := maxi(1, int(ceil(float(maxi(1, _n_live)) / float(max_pts))))
+	var stride_corpse := maxi(1, int(ceil(float(maxi(1, _n_corpse)) / float(float(max_pts) * 0.6))))
+	var cnt := 0
+	var ccnt := 0
+	for i in range(TOTAL):
+		if _alive[i] != 1:
+			continue
+		if _ptype[i] == 0:
+			if _px[i] < mid:
+				left += 1
+			else:
+				right += 1
+			cnt += 1
+			if cnt % stride_live == 0:
+				live.append(Vector2(_px[i], _py[i]))
+		else:
+			ccnt += 1
+			if ccnt % stride_corpse == 0:
+				corpse.append(Vector2(_px[i], _py[i]))
+	var blocks: Array = []
+	for b in _blk:
+		blocks.append([b["a"], b["b"], int(b["state"])])
+	var fuses := PackedVector2Array()
+	for f in _fuse:
+		fuses.append(f["c"])
+	return {
+		"live": live, "corpse": corpse,
+		"left": left, "right": right,
+		"blocks": blocks, "fuses": fuses,
+	}
+
+
 func _tick_fuses(dt: float) -> void:
 	if _fuse.is_empty():
 		return

@@ -143,8 +143,9 @@ func _build_hud() -> void:
 	# 整肺简图（右上角）
 	var vp := get_viewport().get_visible_rect().size
 	mini = load("res://scripts/ui/minimap.gd").new()
-	mini.size = Vector2(300.0, 132.0)
-	mini.position = Vector2(vp.x - 320.0, 16.0)
+	mini.size = Vector2(360.0, 190.0)
+	mini.position = Vector2(vp.x - 376.0, 16.0)
+	mini.pop = pop
 	layer.add_child(mini)
 
 	_hint = Label.new()
@@ -165,6 +166,7 @@ func _gen_map() -> void:
 	view.set_map(_map)
 	if mini != null:
 		mini.map = _map
+		mini.pop = pop
 		mini.tex = view.map_texture()
 	if cam != null:
 		# 限位到「器官本身」的范围，别让镜头跑到体腔外的空地上
