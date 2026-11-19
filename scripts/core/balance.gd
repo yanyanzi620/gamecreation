@@ -109,8 +109,8 @@ const PLAYER_R := 26.0          # 单元视觉半径；碰撞按 0.72R 的偏移
 # ============================================================ 手段 · 射流
 const JET_LENGTH := 470.0        # 射程；调大 = 一次性清得更深
 const JET_HALF_ANGLE_DEG := 16.0 # 半角；调大 = 扇形更宽、更容易扫到
-const JET_COOLDOWN := 0.50       # 两发之间最短间隔
-const JET_VIS_SEC := 0.30        # 弹道残影停留时间（纯表现）
+const JET_COOLDOWN := 0.22       # 两发之间最短间隔；按住左键会按这个节奏自动连发
+const JET_VIS_SEC := 0.26        # 弹道残影停留时间（纯表现）
 const JET_ARC_STEPS := 18        # 扇形绘制细分（纯表现）
 const JET_RAYS := 15             # 射线数：射流被墙逐条截断的精度；调大 = 边缘更贴墙
 
@@ -135,7 +135,7 @@ const BLOCK_RANGE_MIN := 90.0    # 最近能放多远；调小 = 能贴脚封路
 const BLOCK_RANGE_MAX := 560.0   # 最远能放多远（一格腔室量级）；调大 = 远程封路更省事
 const BLOCK_MIN_USABLE := 70.0   # 被肉壁裁完短于这个就不让放（太窄的缝本来也堵不住）
 const BLOCK_ARM := 0.45          # 闪烁多久才生效（生效前只减速、不拦人）
-const BLOCK_LIFE := 30.0         # 生效后存活多久，到点自溶
+const BLOCK_LIFE := 60.0         # 生效后存活多久，到点自溶（翻倍过：30 秒时刚封好就到期，太憋）
 const BLOCK_SLACK := 12.0        # 端点容差
 const BLOCK_COOLDOWN := 0.20     # 只防手滑双击，真正的限制是养分
 

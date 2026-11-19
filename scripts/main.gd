@@ -49,6 +49,7 @@ var _spawn_pts: Array[Vector2] = []
 var _acc := 0.0
 var _blk_cd := 0.0
 var _fuse_cd := 0.0
+var _lmb_held := false          # 左键按住 = 连发（节奏由 jet 的冷却决定）
 var _tick_us := 0
 var _aim := MODE_NONE
 
@@ -273,8 +274,12 @@ func _unhandled_input(e: InputEvent) -> void:
 		return
 	var mb := e as InputEventMouseButton
 	if mb.button_index == MOUSE_BUTTON_LEFT:
+		# 按下先打一发（手感要即时），之后按住由 _process 里的连发按冷却续上
 		if mb.pressed:
 			fire_at(get_global_mouse_position())
+			_lmb_held = true
+		else:
+			_lmb_held = false
 		return
 	if mb.button_index == MOUSE_BUTTON_RIGHT:
 		# 按住右键 -> 拖拽瞄准；松开 -> 落位（养分/冷却不够时预览是红的）
@@ -395,6 +400,13 @@ func _process(delta: float) -> void:
 		mv.y += 1.0
 	player_unit.move_input(mv, delta)
 	_update_aim()
+
+	# 按住左键连发：瞄准拖拽（带/引信）时不打，免得一边拖一边喷
+	# 用真实按键状态兜底：切窗口/丢焦点时松开事件可能收不到，不然会一直喷
+	if _lmb_held and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		_lmb_held = false
+	if _lmb_held and _aim == MODE_NONE and jet.ready_ratio() >= 1.0:
+		fire_at(get_global_mouse_position())
 
 	if cam != null:
 		cam.position = player_unit.position

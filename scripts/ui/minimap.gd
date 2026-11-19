@@ -115,27 +115,27 @@ func _draw() -> void:
 	draw_arc(pp, 4.2 + breath * 2.4, 0.0, TAU, 16, Color(0.55, 0.82, 1.0, 0.30 + 0.45 * breath), 1.2)
 	draw_circle(pp, 2.6, Color(0.86, 0.95, 1.0))
 
-	# ---- 顶栏：图标 + 数量（不用文字标签）
+	# ---- 顶栏：图标 + 数量 + 小字（图标给形状，小字说明它是什么）
 	var n_live: int = 0 if pop == null else pop.live_count()
 	var n_corpse: int = 0 if pop == null else pop.corpse_count()
 	var n_blk: int = 0 if pop == null else pop.block_count()
 	var n_fuse: int = 0 if pop == null else pop.fuse_count()
 	var hx := 8.0
-	hx = _head_chip(Vector2(hx, 6.0), "virus", n_live, Color(0.62, 0.92, 0.66, 0.95))
-	hx = _head_chip(Vector2(hx, 6.0), "corpse", n_corpse, Color(0.82, 0.86, 0.90, 0.90))
-	hx = _head_chip(Vector2(hx, 6.0), "block", n_blk, Color(0.45, 0.90, 1.0, 0.95))
-	hx = _head_chip(Vector2(hx, 6.0), "fuse", n_fuse, Color(1.0, 0.70, 0.42, 0.95))
+	hx = _head_chip(Vector2(hx, 6.0), "virus", "病毒", n_live, Color(0.62, 0.92, 0.66, 0.95))
+	hx = _head_chip(Vector2(hx, 6.0), "corpse", "尸体", n_corpse, Color(0.82, 0.86, 0.90, 0.90))
+	hx = _head_chip(Vector2(hx, 6.0), "block", "阻隔带", n_blk, Color(0.45, 0.90, 1.0, 0.95))
+	hx = _head_chip(Vector2(hx, 6.0), "fuse", "引信", n_fuse, Color(1.0, 0.70, 0.42, 0.95))
 
-	# ---- 底栏：两叶负载（肺叶图标 + 数字 + 条）
+	# ---- 底栏：两叶负载（肺叶图标 + 小字 + 数字 + 条）
 	var base_y := size.y - FOOT_H + 4.0
-	_draw_load(Vector2(8.0, base_y), _left, size.x - 16.0)
-	_draw_load(Vector2(8.0, base_y + 14.0), _right, size.x - 16.0)
+	_draw_load(Vector2(8.0, base_y), "左叶", _left, size.x - 16.0)
+	_draw_load(Vector2(8.0, base_y + 14.0), "右叶", _right, size.x - 16.0)
 
 	draw_rect(r, Color(0.34, 0.52, 0.58, 0.70), false, 1.0)
 
 
-# 顶栏一个小单元：12px 图标 + 数字；返回下一个的 x
-func _head_chip(pos: Vector2, key: String, val: int, col: Color) -> float:
+# 顶栏一个小单元：12px 图标 + 数字 + 小字；返回下一个的 x
+func _head_chip(pos: Vector2, key: String, label: String, val: int, col: Color) -> float:
 	var t: Texture2D = icons.get(key, null)
 	if t != null:
 		draw_texture_rect(t, Rect2(pos, Vector2(13.0, 13.0)), false, col)
@@ -145,11 +145,14 @@ func _head_chip(pos: Vector2, key: String, val: int, col: Color) -> float:
 	var fs := 12
 	var tx := pos.x + 16.0
 	draw_string(font, Vector2(tx, pos.y + 11.0), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
-	return tx + font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x + 12.0
+	tx += font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x + 4.0
+	draw_string(font, Vector2(tx, pos.y + 11.0), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 10,
+		Color(0.74, 0.82, 0.88, 0.78))
+	return tx + font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x + 12.0
 
 
-# 单叶负载条：肺叶图标 + 数字 + 条（左叶在上、右叶在下）
-func _draw_load(pos: Vector2, val: int, width: float) -> void:
+# 单叶负载条：肺叶图标 + 小字 + 数字 + 条（左叶在上、右叶在下）
+func _draw_load(pos: Vector2, label: String, val: int, width: float) -> void:
 	var soft_cap := 900.0                     # 单叶 900 颗算「压满」，只用于显示比例
 	var t: Texture2D = icons.get("lobe", null)
 	var col := Color(0.74, 0.90, 0.34, 0.95)
@@ -159,9 +162,13 @@ func _draw_load(pos: Vector2, val: int, width: float) -> void:
 	else:
 		draw_circle(pos + Vector2(6.0, 7.0), 4.0, Color(0.62, 0.86, 0.94, 0.9))
 	var txt := str(val)
-	draw_string(font, pos + Vector2(15.0, 12.0), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11,
+	var lx := pos.x + 15.0
+	draw_string(font, Vector2(lx, pos.y + 11.0), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 10,
+		Color(0.74, 0.82, 0.88, 0.80))
+	lx += font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 10).x + 5.0
+	draw_string(font, Vector2(lx, pos.y + 11.0), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11,
 		Color(0.82, 0.88, 0.94, 0.95))
-	var bx := pos.x + 15.0 + font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x + 8.0
+	var bx := lx + font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x + 8.0
 	var bw := maxf(10.0, width - (bx - pos.x) - 4.0)
 	draw_rect(Rect2(bx, pos.y + 3.0, bw, 7.0), Color(0.10, 0.13, 0.16, 0.9), true)
 	var fill := clampf(float(val) / soft_cap, 0.0, 1.0)
