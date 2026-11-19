@@ -82,6 +82,7 @@ const BLK_RANGE_MIN := Balance.BLOCK_RANGE_MIN
 const BLK_RANGE_MAX := Balance.BLOCK_RANGE_MAX
 const BLK_MIN_USABLE := Balance.BLOCK_MIN_USABLE
 const BLK_SLACK := Balance.BLOCK_SLACK
+const BLK_MAX := Balance.BLOCK_MAX
 const BLK_STATE_ARM := 0
 const BLK_STATE_ON := 1
 
@@ -400,8 +401,30 @@ func _kill(i: int) -> void:
 func _to_corpse(i: int) -> void:
 	if i < 0 or i >= _n or _ptype[i] != 0:
 		return
+	# 掉落是概率事件：大多数病毒被打掉后直接消失，只有 CORPSE_CHANCE 的比例留疤。
+	# 为什么不在调用点随机：击杀分散在 4 条路径（射流/净化场/引信/自溶），
+	# 只有收口在这里，概率才不会被某一路偷偷绕过。
+	if _rng.randf() >= Balance.CORPSE_CHANCE:
+		_die_no_corpse(i)
+		return
 	_ptype[i] = 1
 	_die[i] = _now + CORPSE_LIFE
+	_fade[i] = -1
+	_n_live -= 1
+	_kind_live[_pkind[i]] -= 1
+	_n_corpse += 1
+	_cell_remove(_px[i], _py[i])
+	_write_slot(i)
+	_dirty = true
+
+
+# 「死得不留疤」：不换位、不改计数口径以外的东西，打成「立即到期的尸体」
+# 交给 _sweep 下一帧回收 —— 因为调用方常常正拿着下标在 for 循环里扫，
+# 直接 _kill(i)（尾部交换）会打乱它们的遍历。
+# 这样也不会产出养分：拾取侧看到 _die <= _now 直接跳过。
+func _die_no_corpse(i: int) -> void:
+	_ptype[i] = 1
+	_die[i] = _now
 	_fade[i] = -1
 	_n_live -= 1
 	_kind_live[_pkind[i]] -= 1
@@ -845,6 +868,8 @@ func take_corpse_near(center: Vector2, radius: float, max_n: int) -> Array:
 		visited += 1
 		if _ptype[i] != 1:
 			continue
+		if _die[i] <= _now:
+			continue                     # 已经到期（含「死得不留疤」的那种），不给养分
 		if _die[i] - _now > CORPSE_LIFE - Balance.CORPSE_PICK_DELAY:
 			continue
 		var vx := _px[i] - center.x
@@ -871,6 +896,8 @@ func harvest_circle(center: Vector2, radius: float, max_n: int) -> int:
 		_qc += 1
 		visited += 1
 		if _ptype[i] != 1:
+			continue
+		if _die[i] <= _now:
 			continue
 		if _die[i] - _now > CORPSE_LIFE - Balance.CORPSE_PICK_DELAY:
 			continue
@@ -1062,6 +1089,8 @@ func resolve_block(origin: Vector2, dir: Vector2, dist: float) -> Dictionary:
 
 
 func place_block(origin: Vector2, dir: Vector2, dist: float) -> bool:
+	if _blk.size() >= BLK_MAX:
+		return false
 	var r: Dictionary = resolve_block(origin, dir, dist)
 	if not bool(r["ok"]):
 		return false
@@ -1170,6 +1199,12 @@ func _write_slot(i: int) -> void:
 		_buf[o + 11] = 0.0
 		return
 	var s := _pr[i] * 2.0
+	if _ptype[i] == 1 and _die[i] <= _now:
+		# 已到期（含「死得不留疤」那种）：这一格立刻不可见，不等 sweep 回收
+		_buf[o] = 0.0
+		_buf[o + 5] = 0.0
+		_buf[o + 11] = 0.0
+		return
 	var col := _kind_color(_pkind[i])
 	if _ptype[i] == 1:
 		var k := clampf((_die[i] - _now) / CORPSE_LIFE, 0.0, 1.0)

@@ -149,7 +149,7 @@ func _draw_skills() -> void:
 		0, 0, 0, true, false)
 
 	_skill(Vector2(SKILL_BX + step, by), "block", "阻隔带", 1.0,
-		Balance.BLOCK_COST, int(data.get("blocks", 0)), 0,
+		Balance.BLOCK_COST, int(data.get("blocks", 0)), Balance.BLOCK_MAX,
 		nutrient >= Balance.BLOCK_COST, aim == 1)
 
 	_skill(Vector2(SKILL_BX + step * 2.0, by), "fuse", "引信", float(data.get("fuse_ratio", 1.0)),

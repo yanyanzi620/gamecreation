@@ -6,7 +6,8 @@ extends Node2D
 #   拾取   = 射流打死的尸体躺够 1 秒后，在 PICKUP_RADIUS 内自动变成光点飞回来
 #            （不用走过去，远处清出来的收益也算数）
 #
-# 养分是硬资源：阻隔带要花 30 才放得出来。
+# 养分是硬资源：阻隔带要花 60 才放得出来，引信 80。
+# 掉落是概率事件（见 Balance.CORPSE_CHANCE），所以拾取不再限速：有就全吸。
 
 const PURGE_RADIUS := Balance.PURGE_RADIUS
 const PURGE_PER_SEC := Balance.PURGE_PER_SEC
@@ -48,19 +49,20 @@ func tick(dt: float, center: Vector2) -> void:
 	# 2) 自动拾取：把范围内的老尸体变成光点
 	#    关键：先算「还能带几个」，再决定吃几个 ——
 	#    否则尸体已经被从池里删掉、光点却因为满员没生成，养分就被吞掉了
-	_acc_pick += dt * PICKUP_PER_SEC
-	if _acc_pick > float(MOTE_MAX):
-		_acc_pick = float(MOTE_MAX)   # 不攒超过一次能带走的量
-	var m := int(_acc_pick)
+	#    PICKUP_PER_SEC <= 0 表示不限速：范围内躺够时间的全吸走（数量只受光点上限约束）
 	var room := MOTE_MAX - _motes.size()
-	if room > 0 and m > 0:
-		if m > room:
-			m = room
-		var spots: Array = _pop.take_corpse_near(center, PICKUP_RADIUS, m)
-		_acc_pick -= float(spots.size())
-		picked += spots.size()
-		for s in spots:
-			_motes.append(s)
+	if room > 0:
+		var want := room
+		if PICKUP_PER_SEC > 0.0:
+			_acc_pick = minf(_acc_pick + dt * PICKUP_PER_SEC, float(MOTE_MAX))
+			want = mini(room, int(_acc_pick))
+		if want > 0:
+			var spots: Array = _pop.take_corpse_near(center, PICKUP_RADIUS, want)
+			if PICKUP_PER_SEC > 0.0:
+				_acc_pick = maxf(0.0, _acc_pick - float(spots.size()))
+			picked += spots.size()
+			for s in spots:
+				_motes.append(s)
 
 	# 3) 光点飞向单元，到了入账
 	var keep: Array = []

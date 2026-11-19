@@ -29,12 +29,14 @@ func setup(h) -> void:
 
 func wants_run() -> bool:
 	var a := OS.get_cmdline_user_args()
-	return a.has("--shot") or a.has("--aim") or a.has("--overview") or a.has("--stress") or a.has("--walk")
+	return a.has("--shot") or a.has("--aim") or a.has("--overview") or a.has("--stress") or a.has("--walk") or a.has("--econ")
 
 
 func run() -> void:
 	var a := OS.get_cmdline_user_args()
-	if a.has("--aim"):
+	if a.has("--econ"):
+		_econ()
+	elif a.has("--aim"):
 		await _aim()
 	elif a.has("--overview"):
 		await _overview()
@@ -105,6 +107,47 @@ func _overview() -> void:
 	host.cam.reset_smoothing()
 	await get_tree().create_timer(0.80).timeout
 	_save("res://overview.png")
+	get_tree().quit()
+
+
+# ============================================================ 经济实测
+# 站着朝一个方向持续开火 20 秒，看「收入（养分/秒）」和「掉落（尸体/秒）」到底多少。
+# 用来给 balance.gd 的 *_COST 定标，不参与正式玩法。
+func _econ() -> void:
+	var seconds := 20.0
+	var frame := 1.0 / 60.0
+	var sub := frame / 4.0
+	# 把单元挪到第一处感染源上：这里病毒最密，量出来的收支才接近实战
+	if host._spawn_pts.size() > 0:
+		host.player_unit.position = host._spawn_pts[0] as Vector2
+	var aim_a := 0.0
+	var t := 0.0
+	var hits := 0
+	var nut0: int = host.aura.nutrient
+	var last_print := 0.0
+	while t < seconds:
+		# 每 0.6 秒换一个朝向（八向轮转）：不假设敌人从哪边来，只量「本地有多密」
+		aim_a = floor(t / 0.6) * (TAU / 8.0)
+		var aim_dir := Vector2.RIGHT.rotated(aim_a)
+		var hit: int = host.jet.fire(host.player_unit.position, aim_dir)
+		if hit > 0:
+			hits += hit
+		for i in range(4):
+			host.pop.tick(sub)
+			host.jet.tick(sub)
+			host.aura.tick(sub, host.player_unit.position)
+		t += frame
+		if t - last_print >= 2.0:
+			last_print = t
+			print("[ECON] t=%.0fs live=%d corpse=%d nut=%d picked=%d hits=%d" % [
+				t, host.pop.live_count(), host.pop.corpse_count(),
+				host.aura.nutrient, host.aura.picked, hits])
+	var sec_used := seconds
+	print("[ECON] RESULT %.0fs  kills=%d (%.1f/s)  corpse_now=%d  nutrient=%d (+%d, %.1f/s)  picked=%d (%.1f/s)" % [
+		sec_used, hits, float(hits) / sec_used, host.pop.corpse_count(),
+		host.aura.nutrient, host.aura.nutrient - nut0,
+		float(host.aura.nutrient - nut0) / sec_used,
+		host.aura.picked, float(host.aura.picked) / sec_used])
 	get_tree().quit()
 
 
