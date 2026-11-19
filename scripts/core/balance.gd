@@ -16,12 +16,13 @@ class_name Balance
 
 
 # ------------------------------------------------------------ 场地
-const ARENA_W := 1600.0
-const ARENA_H := 1000.0
+# 场地放大到 3040x1320：屏幕只看到局部，靠相机跟随（左右两叶 + 中间纵隔）
+const ARENA_W := 3040.0
+const ARENA_H := 1320.0
 const ARENA_PAD := 30.0        # 病毒不许长到离边这么近的区域
 const CELL := 30.0             # 粗格边长；只影响密度判定，不影响手感
-const GRID_W := 54             # = ARENA_W / CELL
-const GRID_H := 34             # = ARENA_H / CELL
+const GRID_W := 102            # = ceil(ARENA_W / CELL)
+const GRID_H := 44             # = ceil(ARENA_H / CELL)
 
 
 # ============================================================ 病毒 · 通用

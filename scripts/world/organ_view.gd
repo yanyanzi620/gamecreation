@@ -29,6 +29,11 @@ var tissue_texture: Texture2D = null
 var _baked: ImageTexture = null
 
 
+# 给 UI（小地图）用的缩略图
+func map_texture() -> Texture2D:
+	return _baked
+
+
 func set_map(m) -> void:
 	map = m
 	_baked = _bake()

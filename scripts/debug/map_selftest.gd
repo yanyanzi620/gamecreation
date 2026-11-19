@@ -39,7 +39,7 @@ func _ready() -> void:
 
 func _test_seed(seedv: int) -> void:
 	var gen := LungGen.new()
-	var m: OrganMap = gen.build(seedv, Vector2(1600.0, 1000.0))
+	var m: OrganMap = gen.build(seedv, Vector2(3040.0, 1320.0))
 	var rep: Dictionary = m.walk_report(16.0)
 
 	var tag := "seed %d" % seedv
@@ -82,9 +82,9 @@ func _wall_check(m: OrganMap) -> bool:
 
 func _determinism() -> bool:
 	var g1 := LungGen.new()
-	var m1: OrganMap = g1.build(20261119, Vector2(1600.0, 1000.0))
+	var m1: OrganMap = g1.build(20261119, Vector2(3040.0, 1320.0))
 	var g2 := LungGen.new()
-	var m2: OrganMap = g2.build(20261119, Vector2(1600.0, 1000.0))
+	var m2: OrganMap = g2.build(20261119, Vector2(3040.0, 1320.0))
 	if m1.seg_a.size() != m2.seg_a.size():
 		return false
 	var h1 := 0.0

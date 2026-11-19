@@ -18,7 +18,7 @@ class_name OrganMap
 # ============================================================
 
 const CELL := 30.0        # 墙段分桶用的粗格（与病毒种群同格）
-const PIX := 8.0          # 掩码 / 距离场的分辨率
+const PIX := 6.0          # 掩码 / 距离场的分辨率
 const SIMPLIFY_EPS := 2.0 # 轮廓简化容差（像素）
 const CONTOUR_STEP := 20.0 # 轮廓采样步长（比 CELL 细，边缘更圆）
 const SHAPE_CELL := 64.0   # 形状索引粗格（加速 sdf 查询）

@@ -30,6 +30,8 @@ const KIND_BAND := 1
 const KIND_CHAIN := 2
 
 var pop
+var cam: Camera2D
+var mini: Control
 var view: Node2D
 var jet
 var aura
@@ -98,6 +100,14 @@ func _build() -> void:
 	add_child(aura)
 	aura.bind(pop)
 
+	# 相机：地图比屏幕大得多，镜头跟着免疫单元走
+	cam = Camera2D.new()
+	cam.name = "Cam"
+	cam.position_smoothing_enabled = true
+	cam.position_smoothing_speed = 9.0
+	add_child(cam)
+	cam.make_current()
+
 
 func _build_hud() -> void:
 	var layer := CanvasLayer.new()
@@ -128,11 +138,18 @@ func _build_hud() -> void:
 	_hud3.add_theme_color_override("font_color", Color(0.62, 0.74, 0.86))
 	layer.add_child(_hud3)
 
+	# 整肺简图（右上角）
+	var vp := get_viewport().get_visible_rect().size
+	mini = load("res://scripts/ui/minimap.gd").new()
+	mini.size = Vector2(300.0, 132.0)
+	mini.position = Vector2(vp.x - 320.0, 16.0)
+	layer.add_child(mini)
+
 	_hint = Label.new()
 	_hint.position = Vector2(18.0, 156.0)
 	_hint.add_theme_font_size_override("font_size", 13)
 	_hint.add_theme_color_override("font_color", Color(0.60, 0.68, 0.64))
-	_hint.text = "WASD 移动 · 左键 = 射流 · 右键 = 阻隔带(30) · 空格 = 引信(40) · R = 换一张肺"
+	_hint.text = "WASD 移动（镜头跟随） · 左键 = 射流 · 右键 = 阻隔带(30) · 空格 = 引信(40) · R = 换一张肺"
 	layer.add_child(_hint)
 
 
@@ -144,6 +161,16 @@ func _gen_map() -> void:
 	_map = gen.build(map_seed, pop.arena_size())
 	pop.bind_organ(_map)
 	view.set_map(_map)
+	if mini != null:
+		mini.map = _map
+		mini.tex = view.map_texture()
+	if cam != null:
+		cam.limit_left = 0
+		cam.limit_top = 0
+		cam.limit_right = int(_map.size.x)
+		cam.limit_bottom = int(_map.size.y)
+		cam.position = player
+		cam.reset_smoothing()
 	# 可达率用「真实碰撞口径」：玩家碰撞按 0.72R 算，这里阈值同步
 	# 阈值与真实碰撞一致：blocked_body 用的是 0.72R 的偏移线
 	var rep: Dictionary = _map.walk_report(Balance.PLAYER_R * 0.72)
@@ -170,8 +197,20 @@ func _reseed(roll_map: bool) -> void:
 	_fuse_cd = 0.0
 
 	_rng.seed = map_seed
-	player = _pick_near_center()
+	player = _pick_start()
+	if cam != null:
+		cam.position = player
+		cam.reset_smoothing()
 	_spawn_wave()
+
+
+# 开局站在左肺门：支气管刚插进左叶的那个口子，出门就是肺泡区
+func _pick_start() -> Vector2:
+	var mid_x: float = _map.size.x * 0.5
+	var p: Vector2 = _map.nearest_free(Vector2(mid_x - 150.0, _map.size.y * 0.5), 300.0)
+	if p.x < 0.0:
+		p = _pick_near_center()
+	return p
 
 
 func _pick_near_center() -> Vector2:
@@ -195,7 +234,7 @@ func _spawn_wave() -> void:
 		var cand: Vector2 = _map.random_free_point(_rng, 52.0)
 		var ok := true
 		for p in _spawn_pts:
-			if p.distance_to(cand) < 380.0:
+			if p.distance_to(cand) < 760.0:
 				ok = false
 				break
 		if ok:
@@ -205,9 +244,10 @@ func _spawn_wave() -> void:
 		var fallback: Vector2 = _map.size * 0.5 + Vector2(float(_spawn_pts.size()) * 120.0, 0.0)
 		_spawn_pts.append(fallback)
 
-	pop.spawn_virus(KIND_BLOB, _spawn_pts[0], 88.0, 0.0, 200, _rng.randf() * TAU)
-	pop.spawn_virus(KIND_BAND, _spawn_pts[1], 165.0, 26.0, 70, _rng.randf() * TAU)
-	pop.spawn_virus(KIND_CHAIN, _spawn_pts[2], 22.0, 0.0, 9, _rng.randf() * TAU)
+	# 场地面积约是原来的 2.5 倍，播种量同比放大，密度手感才接近
+	pop.spawn_virus(KIND_BLOB, _spawn_pts[0], 88.0, 0.0, 380, _rng.randf() * TAU)
+	pop.spawn_virus(KIND_BAND, _spawn_pts[1], 165.0, 26.0, 120, _rng.randf() * TAU)
+	pop.spawn_virus(KIND_CHAIN, _spawn_pts[2], 22.0, 0.0, 14, _rng.randf() * TAU)
 
 
 # ============================================================ 输入
@@ -317,6 +357,15 @@ func _process(delta: float) -> void:
 		mv.y += 1.0
 	_move_step(mv, delta)
 
+	if cam != null:
+		cam.position = player
+	if mini != null:
+		mini.player = player
+		if cam != null:
+			var vs: Vector2 = get_viewport_rect().size / cam.zoom
+			mini.view_rect = Rect2(cam.get_screen_center_position() - vs * 0.5, vs)
+		mini.queue_redraw()
+
 	if _blk_cd > 0.0:
 		_blk_cd = maxf(0.0, _blk_cd - delta)
 	if _fuse_cd > 0.0:
@@ -355,8 +404,9 @@ func _update_hud() -> void:
 		pop.fuse_count(), _blk_cd, _fuse_cd
 	]
 	if _map != null:
-		_hud3.text = "肺 seed %d   流明 %.1f%%   墙段 %d   轮廓 %d" % [
-			map_seed, _map.free_ratio * 100.0, _map.seg_a.size(), _map.loops.size()
+		_hud3.text = "肺 seed %d   左叶/右叶 + 中间支气管   流明 %.1f%%   墙段 %d   轮廓 %d   面 %d×%d" % [
+			map_seed, _map.free_ratio * 100.0, _map.seg_a.size(), _map.loops.size(),
+			int(_map.size.x), int(_map.size.y)
 		]
 
 
@@ -380,24 +430,34 @@ func _draw() -> void:
 func _shot_sequence() -> void:
 	await get_tree().create_timer(0.60).timeout
 	# 站到第一个病毒团旁边，保证射流够得到（否则 hit 永远是 0）
+	var aim := Vector2.RIGHT
+	var demo := player
 	if _spawn_pts.size() >= 1:
 		var target: Vector2 = _spawn_pts[0]
 		var behind: Vector2 = _map.nearest_free(target + Vector2(-235.0, 60.0), 200.0)
 		if behind.x > 0.0:
 			player = behind
+			cam.position = player
+			cam.reset_smoothing()
+			aim = (target - player).normalized()
+	# 相机跟随之后，固定坐标的老病毒团可能已经在射程外 —— 正前方补一团做验收
+	demo = player + aim * 250.0
+	if not _map.solid_point(demo):
+		pop.spawn_virus(KIND_BLOB, demo, 66.0, 0.0, 110, 0.0)
 	await get_tree().create_timer(0.60).timeout
-	if _spawn_pts.size() >= 1:
-		_place_block(_spawn_pts[0])
+	_place_block(demo)
 	await get_tree().create_timer(1.60).timeout
-	if _spawn_pts.size() >= 1:
-		_fire(_spawn_pts[0])
+	_fire(demo)
 	await get_tree().create_timer(0.55).timeout
-	if _spawn_pts.size() >= 1:
-		_fire(_spawn_pts[0])
+	_fire(demo)
 	await get_tree().create_timer(0.85).timeout
 	_save("res://main_shot_a.png")
-	if _spawn_pts.size() >= 3:
-		pop.add_fuse(_spawn_pts[2])
+	# 引信丢到正前方那团病毒里（能吸链、能清盘/带）
+	var fuse_spot: Vector2 = player + aim * 180.0
+	if _map.solid_point(fuse_spot):
+		fuse_spot = _map.nearest_free(fuse_spot, 60.0)
+	if fuse_spot.x > 0.0:
+		pop.add_fuse(fuse_spot)
 	await get_tree().create_timer(2.20).timeout
 	_save("res://main_shot_b.png")
 	get_tree().quit()
