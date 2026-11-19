@@ -307,8 +307,7 @@ func _unhandled_input(e: InputEvent) -> void:
 # ------------------------------------------------------------ 瞄准与落位
 
 func _can_block() -> bool:
-	return (_blk_cd <= 0.0 and aura.nutrient >= Balance.BLOCK_COST
-		and pop.block_count() < Balance.BLOCK_MAX)
+	return _blk_cd <= 0.0 and aura.nutrient >= Balance.BLOCK_COST
 
 
 func _can_fuse() -> bool:

@@ -82,7 +82,6 @@ const BLK_RANGE_MIN := Balance.BLOCK_RANGE_MIN
 const BLK_RANGE_MAX := Balance.BLOCK_RANGE_MAX
 const BLK_MIN_USABLE := Balance.BLOCK_MIN_USABLE
 const BLK_SLACK := Balance.BLOCK_SLACK
-const BLK_MAX := Balance.BLOCK_MAX
 const BLK_STATE_ARM := 0
 const BLK_STATE_ON := 1
 
@@ -1089,8 +1088,6 @@ func resolve_block(origin: Vector2, dir: Vector2, dist: float) -> Dictionary:
 
 
 func place_block(origin: Vector2, dir: Vector2, dist: float) -> bool:
-	if _blk.size() >= BLK_MAX:
-		return false
 	var r: Dictionary = resolve_block(origin, dir, dist)
 	if not bool(r["ok"]):
 		return false
