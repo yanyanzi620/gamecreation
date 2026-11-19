@@ -37,9 +37,13 @@ const CAP_BAND := Balance.BAND_CAP
 const CAP_CHAIN := Balance.CHAIN_CAP
 
 # ------------------------------------------------------------ 池
-const MAX_LIVE := Balance.VIRUS_MAX_LIVE
+# 病毒不设上限：粒子池按需扩容（_grow_pool），只给尸体留一个「视觉预算」上限
+const CAP_INIT := Balance.VIRUS_CAP_INIT
+const GROW_STEP := Balance.VIRUS_GROW_STEP
 const MAX_CORPSE := Balance.VIRUS_MAX_CORPSE
-const TOTAL := MAX_LIVE + MAX_CORPSE
+const WORK_BUDGET := Balance.VIRUS_WORK_BUDGET
+const SPAWN_BUDGET := Balance.VIRUS_SPAWN_BUDGET
+const QUERY_BUDGET := Balance.VIRUS_QUERY_BUDGET
 
 # ------------------------------------------------------------ 空间
 const CELL := Balance.CELL
@@ -60,6 +64,8 @@ const PROBE_DIST := Balance.VIRUS_PROBE_DIST
 const ESCAPE_PROBE := Balance.VIRUS_ESCAPE_PROBE
 const RETRY_MIN := Balance.VIRUS_RETRY_MIN
 const RETRY_MAX := Balance.VIRUS_RETRY_MAX
+const Satur_MIN := Balance.VIRUS_SATUR_COOL_MIN
+const Satur_MAX := Balance.VIRUS_SATUR_COOL_MAX
 const JET_RAYS := Balance.JET_RAYS
 
 # 跳跃链 = 单点传播：不粘连、不稳方向，只保证「整体往前推」
@@ -99,19 +105,33 @@ const COL_CHAIN := Color(0.88, 0.38, 0.80, 0.92)
 const COL_CORPSE := Color(0.66, 0.70, 0.74, 0.88)
 
 # ------------------------------------------------------------ 状态
+# 粒子池：连续存储 + 尾部交换删除。没有 free list，也没有固定上限。
 var _px := PackedFloat32Array()
 var _py := PackedFloat32Array()
 var _pr := PackedFloat32Array()
-var _page := PackedFloat32Array()
-var _plife := PackedFloat32Array()
-var _pcool := PackedFloat32Array()
 var _pkind := PackedInt32Array()
 var _pax := PackedFloat32Array()
 var _ptype := PackedInt32Array()      # 0 = live, 1 = corpse
 var _pvid := PackedInt32Array()
-var _alive := PackedInt32Array()
-var _free: Array[int] = []
-var _cell := PackedInt32Array()
+# 时间一律存「绝对到时」，不再存倒计时：没被扫到的粒子不会算错，也不用每帧逐个减
+var _due := PackedFloat32Array()      # 这颗下次可复制的绝对时刻
+var _die := PackedFloat32Array()      # 尸体会消失的绝对时刻
+var _fade := PackedInt32Array()       # 尸体已写到的淡化档位（避免每帧重写 12 个浮点）
+var _cell := PackedInt32Array()       # 粗格占用计数（按位置算，不受索引搬动影响）
+
+# 轻量计时（只在 --stress 里打开，平时全是 0，不影响正式跑）
+var prof_enabled := false
+var prof_sweep_us := 0
+var prof_upload_us := 0
+var prof_rep_n := 0
+var prof_rep_us := 0
+var prof_scan_n := 0
+
+var _n := 0                           # 池里用了多少个槽（live + corpse 连续排在一起）
+var _cap := 0
+var _now := 0.0
+var _cur := 0                         # 模拟轮转游标
+var _qc := 0                          # 查询轮转游标（净化 / 拾取共用）
 
 var _n_live := 0
 # 最近一次射流被墙截断后的外缘点（世界坐标），jet_system 直接拿来画
@@ -141,27 +161,40 @@ func _ready() -> void:
 	_init_multimesh()
 
 func _init_pool() -> void:
-	_px.resize(TOTAL)
-	_py.resize(TOTAL)
-	_pr.resize(TOTAL)
-	_page.resize(TOTAL)
-	_plife.resize(TOTAL)
-	_pcool.resize(TOTAL)
-	_pkind.resize(TOTAL)
-	_pax.resize(TOTAL)
-	_ptype.resize(TOTAL)
-	_pvid.resize(TOTAL)
-	_alive.resize(TOTAL)
-	_alive.fill(0)
 	_cell.resize(GRID_W * GRID_H)
 	_cell.fill(0)
 	_kind_live.resize(KIND_COUNT)
 	_kind_live.fill(0)
-	_free.clear()
-	for i in range(TOTAL):
-		_free.append(i)
-	_buf.resize(TOTAL * 12)
-	_buf.fill(0.0)
+	_grow_pool(CAP_INIT)
+
+# 扩池：整块 resize（PackedArray 的 resize 会保留旧内容，新尾巴自动填 0）
+func _grow_pool(need: int) -> void:
+	if need <= _cap:
+		return
+	var cap := _cap
+	var step := GROW_STEP
+	if cap <= 0:
+		cap = CAP_INIT
+		step = GROW_STEP
+	while cap < need:
+		cap += step
+		step = int(float(step) * 1.4)
+	_px.resize(cap)
+	_py.resize(cap)
+	_pr.resize(cap)
+	_pkind.resize(cap)
+	_pax.resize(cap)
+	_ptype.resize(cap)
+	_pvid.resize(cap)
+	_due.resize(cap)
+	_die.resize(cap)
+	_fade.resize(cap)
+	_buf.resize(cap * 12)
+	_cap = cap
+	if _mmi != null:
+		_mmi.multimesh.instance_count = cap
+		_mmi.multimesh.visible_instance_count = cap
+		_dirty = true
 
 func _init_multimesh() -> void:
 	var mm := MultiMesh.new()
@@ -170,8 +203,8 @@ func _init_multimesh() -> void:
 	var qm := QuadMesh.new()
 	qm.size = Vector2(1.0, 1.0)
 	mm.mesh = qm
-	mm.instance_count = TOTAL
-	mm.visible_instance_count = TOTAL
+	mm.instance_count = _cap
+	mm.visible_instance_count = _cap
 
 	_mmi = MultiMeshInstance2D.new()
 	_mmi.z_index = -1
@@ -235,6 +268,11 @@ func _seed_point(kind: int, center: Vector2, a: float, b: float, axis: float) ->
 func live_count() -> int:
 	return _n_live
 
+
+# 池里已经占用了多少个槽（live + 尸体），压力测试用来看扩容效果
+func slot_count() -> int:
+	return _n
+
 func corpse_count() -> int:
 	return _n_corpse
 
@@ -253,15 +291,13 @@ func bind_organ(m) -> void:
 
 # 整场清空（重开用）：池、格子、尸体、阻隔带、引信全部归零
 func reset() -> void:
-	for i in range(TOTAL):
-		if _alive[i] == 1:
-			_alive[i] = 0
-			_write_slot(i)
-	_alive.fill(0)
+	_n = 0
+	_cur = 0
+	_qc = 0
+	_now = 0.0
 	_buf.fill(0.0)
-	_free.clear()
-	for i in range(TOTAL):
-		_free.append(i)
+	if _mmi != null:
+		_mmi.multimesh.buffer = _buf
 	_n_live = 0
 	_n_corpse = 0
 	_kind_live.fill(0)
@@ -278,26 +314,24 @@ func reset() -> void:
 
 func _spawn(x: float, y: float, r: float, type: int, kind: int, axis: float,
 		vid: int, page: float, cool: float) -> int:
-	if _free.is_empty():
-		return -1
-	if type == 0 and _n_live >= MAX_LIVE:
-		return -1
-	if type == 1 and _n_corpse >= MAX_CORPSE:
-		return -1
 	if type == 0 and organ != null and organ.solid_point(Vector2(x, y)):
 		return -1
-	var i: int = _free.pop_back()
-	_alive[i] = 1
+	if type == 1 and _n_corpse >= MAX_CORPSE:
+		_drop_oldest_corpse()
+	if _n + 1 > _cap:
+		_grow_pool(_n + 1)
+	var i := _n
+	_n += 1
 	_px[i] = x
 	_py[i] = y
 	_pr[i] = r
-	_page[i] = page
-	_pcool[i] = cool
 	_ptype[i] = type
 	_pkind[i] = kind
 	_pax[i] = axis
 	_pvid[i] = vid
-	_plife[i] = CORPSE_LIFE if type == 1 else 0.0
+	_due[i] = _now + cool
+	_die[i] = _now + CORPSE_LIFE if type == 1 else 0.0
+	_fade[i] = -1
 	if type == 0:
 		_n_live += 1
 		_kind_live[kind] += 1
@@ -308,8 +342,23 @@ func _spawn(x: float, y: float, r: float, type: int, kind: int, axis: float,
 	_dirty = true
 	return i
 
+
+# 槽位搬家用：把 src 整块覆盖到 dst（尾部交换删除的核心）
+func _copy_slot(dst: int, src: int) -> void:
+	_px[dst] = _px[src]
+	_py[dst] = _py[src]
+	_pr[dst] = _pr[src]
+	_pkind[dst] = _pkind[src]
+	_pax[dst] = _pax[src]
+	_ptype[dst] = _ptype[src]
+	_pvid[dst] = _pvid[src]
+	_due[dst] = _due[src]
+	_die[dst] = _die[src]
+	_fade[dst] = _fade[src]
+
+
 func _kill(i: int) -> void:
-	if _alive[i] == 0:
+	if i < 0 or i >= _n:
 		return
 	if _ptype[i] == 0:
 		_n_live -= 1
@@ -317,23 +366,38 @@ func _kill(i: int) -> void:
 		_cell_remove(_px[i], _py[i])
 	else:
 		_n_corpse -= 1
-	_alive[i] = 0
-	_free.append(i)
-	_write_slot(i)
+	var last := _n - 1
+	if i != last:
+		_copy_slot(i, last)
+	_n = last
+	_write_slot(last)
 	_dirty = true
 
+
 func _to_corpse(i: int) -> void:
-	if _alive[i] == 0 or _ptype[i] != 0:
+	if i < 0 or i >= _n or _ptype[i] != 0:
 		return
 	_ptype[i] = 1
-	_plife[i] = CORPSE_LIFE
-	_page[i] = 0.0
+	_die[i] = _now + CORPSE_LIFE
+	_fade[i] = -1
 	_n_live -= 1
 	_kind_live[_pkind[i]] -= 1
 	_n_corpse += 1
 	_cell_remove(_px[i], _py[i])
 	_write_slot(i)
 	_dirty = true
+
+
+# 尸体超过上限就丢一颗（从查询游标往后找，避免每次都从 0 开始）
+func _drop_oldest_corpse() -> bool:
+	var visited := 0
+	while visited < _n:
+		var i := (_qc + visited) % _n
+		visited += 1
+		if _ptype[i] == 1:
+			_kill(i)
+			return true
+	return false
 
 # ============================================================ 粗格
 
@@ -384,49 +448,85 @@ func _dir_weight(kind: int, axis: float, ang: float) -> float:
 # ============================================================ 模拟
 
 func tick(dt: float) -> void:
+	_now += dt
 	_tick_blocks(dt)
 	_tick_fuses(dt)
-	for i in range(TOTAL):
-		if _alive[i] == 0:
-			continue
-		if _ptype[i] == 0:
-			_page[i] += dt
-			_pcool[i] -= dt
-			if _pcool[i] <= 0.0:
-				_replicate(i)
-		else:
-			_plife[i] -= dt
-			if _plife[i] <= 0.0:
-				_kill(i)
-			else:
-				_write_slot(i)
-
+	var t0 := Time.get_ticks_usec() if prof_enabled else 0
+	_sweep()
+	if prof_enabled:
+		prof_sweep_us += Time.get_ticks_usec() - t0
 	if _dirty:
+		var t1 := Time.get_ticks_usec() if prof_enabled else 0
 		_mmi.multimesh.buffer = _buf
 		_dirty = false
+		if prof_enabled:
+			prof_upload_us += Time.get_ticks_usec() - t1
 
-func _replicate(i: int) -> void:
-	if _n_live >= MAX_LIVE:
-		_pcool[i] = _retry_cool()
+
+# 每帧只处理「预算内的槽」：不管池里有多少颗，单帧开销都有上限。
+# 轮转游标保证被跳过的粒子只是把动作推到下一轮，逻辑不会错、也不会漏。
+func _sweep() -> void:
+	if _n <= 0:
+		_cur = 0
 		return
+	var budget := clampi(_n / 8, WORK_BUDGET, WORK_BUDGET * 6)
+	var spawns := SPAWN_BUDGET
+	var visited := 0
+	while visited < budget and _n > 0:
+		if _cur >= _n:
+			_cur = 0
+		var i := _cur
+		_cur += 1
+		visited += 1
+		prof_scan_n += 1
+		if _ptype[i] == 0:
+			if _due[i] <= _now and spawns > 0:
+				if prof_enabled:
+					var tr := Time.get_ticks_usec()
+					spawns -= _replicate(i)
+					prof_rep_us += Time.get_ticks_usec() - tr
+					prof_rep_n += 1
+				else:
+					spawns -= _replicate(i)
+		else:
+			if _die[i] <= _now:
+				_kill(i)
+				if _cur > _n:
+					_cur = 0
+			else:
+				_fade_corpse(i)
 
+
+# 尸体淡化只在「档位变了」才重写 12 个浮点，省掉整池每帧重写
+func _fade_corpse(i: int) -> void:
+	var b := int((_die[i] - _now) / (CORPSE_LIFE / 24.0))
+	if b != _fade[i]:
+		_fade[i] = b
+		_write_slot(i)
+		_dirty = true
+
+
+# 返回这一帧真的提交了几个新粒子（0 / 1），供单帧预算记账
+func _replicate(i: int) -> int:
 	var kind := _pkind[i]
 	var axis := _pax[i]
 	var cap := _cell_cap(kind)
 
 	# 跳跃链 = 单点传播：往前方扇形里随机落一个点，隔着阻隔带也照样落
 	if kind == KIND_CHAIN:
-		_chain_spread(i, axis)
-		return
+		return _chain_spread(i, axis)
 	var best := _pick_dir(i, kind, axis, cap, PI)
+	# 塞满和撞墙是两种失败：塞满的地方再等也长不出来，直接长退避，
+	# 否则每 0.3 秒重试一次，几万颗时会白白烧掉大量帧时间
 	if not best[3]:
-		_pcool[i] = _retry_cool()
-		return
-	_do_spawn(i, best[1], best[2], kind, cap, best[4])
+		_due[i] = _now + (_saturate_cool() if best[5] == 1 else _retry_cool())
+		return 0
+	return _do_spawn(i, best[1], best[2], kind, cap, best[4])
 
 # 在 max_diff 夹角范围内，挑「权重 × 剩余容量」最大的方向
 # 返回 [score, dx, dy, found]
 func _pick_dir(i: int, kind: int, axis: float, cap: int, max_diff: float) -> Array:
+	var saw_cap := false
 	for pass_i in range(2):
 		# 第二遍把探路距离放到 ESCAPE_PROBE：本地格子长满时，还能往远处空位甩一颗，
 		# 否则「小股病毒坐在一个塞满的格子里」会一直不长，看起来像卡住
@@ -445,15 +545,22 @@ func _pick_dir(i: int, kind: int, axis: float, cap: int, max_diff: float) -> Arr
 			var ty := _py[i] + dy * pd
 			if tx < ARENA_PAD or tx > ARENA_W - ARENA_PAD or ty < ARENA_PAD or ty > ARENA_H - ARENA_PAD:
 				continue
-			# 器官肉壁：这个方向长不过去
-			if organ != null and organ.blocked(Vector2(_px[i], _py[i]), Vector2(tx, ty)):
-				continue
+			# 器官肉壁：这个方向长不过去。
+			# 探路距离 30 比最薄隔膜（46）还短，所以「终点一格是否实心」就等价于「这段没穿墙」，
+			# 单点采样足够；只有第二遍 60 的远投才需要沿线段多点采样。
+			if organ != null:
+				if pd <= 32.0:
+					if organ.solid_xy(tx, ty):
+						continue
+				elif not organ.line_free(_px[i], _py[i], tx, ty):
+					continue
 			# 生效的阻隔带把外面封死：这个方向不可选，
 			# 于是生长会自动沿带子走向两端，形成绕射
 			if _block_cross(_px[i], _py[i], tx, ty) == 1:
 				continue
 			var c := _cell_count(tx, ty)
 			if c >= cap:
+				saw_cap = true
 				continue
 			var sc := _dir_weight(kind, axis, ang) * float(cap - c)
 			if pass_i == 1:
@@ -467,10 +574,10 @@ func _pick_dir(i: int, kind: int, axis: float, cap: int, max_diff: float) -> Arr
 				bx = dx
 				by = dy
 		if found:
-			return [best, bx, by, true, pass_i == 1]
-	return [0.0, 0.0, 0.0, false, false]
+			return [best, bx, by, true, pass_i == 1, 0]
+	return [0.0, 0.0, 0.0, false, false, 1 if saw_cap else 0]
 
-func _chain_spread(i: int, axis: float) -> void:
+func _chain_spread(i: int, axis: float) -> int:
 	# 往主轴前方 ±CHAIN_SPREAD_DEG 的扇形里随机落一个点。
 	# 不沿地面走 -> 阻隔带栏不住（这是它和带状病毒最大的区别）；
 	# 点与点之间天然留空 -> 不会糊成条带。
@@ -479,30 +586,31 @@ func _chain_spread(i: int, axis: float) -> void:
 	var nx := _px[i] + cos(ang) * dist
 	var ny := _py[i] + sin(ang) * dist
 	if nx < ARENA_PAD or nx > ARENA_W - ARENA_PAD or ny < ARENA_PAD or ny > ARENA_H - ARENA_PAD:
-		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
-		return
+		_due[i] = _now + _rng.randf_range(COOL_MIN, COOL_MAX)
+		return 0
 	# 跳跃链是「空中落点」：能跨阻隔带、也能跨肉壁，
 	# 但落点必须被拉回流明里，否则会嵌进组织内部
-	if organ != null and organ.solid_point(Vector2(nx, ny)):
+	if organ != null and organ.solid_xy(nx, ny):
 		var free_at: Vector2 = organ.nearest_free(Vector2(nx, ny), 90.0)
 		if free_at.x < 0.0:
-			_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
-			return
+			_due[i] = _now + _rng.randf_range(COOL_MIN, COOL_MAX)
+			return 0
 		nx = free_at.x
 		ny = free_at.y
 	if nx < ARENA_PAD or nx > ARENA_W - ARENA_PAD or ny < ARENA_PAD or ny > ARENA_H - ARENA_PAD:
-		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
-		return
+		_due[i] = _now + _rng.randf_range(COOL_MIN, COOL_MAX)
+		return 0
 	if _cell_count(nx, ny) >= CAP_CHAIN:
-		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
-		return
+		_due[i] = _now + _rng.randf_range(COOL_MIN, COOL_MAX)
+		return 0
 	var naxis := axis + deg_to_rad(_rng.randf_range(-14.0, 14.0))
-	_spawn(nx, ny, _rng.randf_range(R_MIN, R_MAX), 0, KIND_CHAIN, naxis,
+	var child := _spawn(nx, ny, _rng.randf_range(R_MIN, R_MAX), 0, KIND_CHAIN, naxis,
 		_pvid[i], 0.0, _rng.randf_range(COOL_MIN, COOL_MAX))
-	_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
+	_due[i] = _now + _rng.randf_range(COOL_MIN, COOL_MAX)
+	return 1 if child >= 0 else 0
 
 # 真正落一个子粒子：抖动角度 + 随机步长 + 主轴缓慢折线
-func _do_spawn(i: int, bx: float, by: float, kind: int, cap: int, far: bool) -> void:
+func _do_spawn(i: int, bx: float, by: float, kind: int, cap: int, far: bool) -> int:
 	var jitter := deg_to_rad(_rng.randf_range(-12.0, 12.0))
 	var nd := Vector2(bx, by).rotated(jitter)
 	var smin := SPAWN_D_MIN
@@ -518,24 +626,22 @@ func _do_spawn(i: int, bx: float, by: float, kind: int, cap: int, far: bool) -> 
 	var nx := _px[i] + nd.x * dist
 	var ny := _py[i] + nd.y * dist
 	if nx < ARENA_PAD or nx > ARENA_W - ARENA_PAD or ny < ARENA_PAD or ny > ARENA_H - ARENA_PAD:
-		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
-		return
-	if organ != null:
-		var q := Vector2(nx, ny)
-		if organ.solid_point(q) or organ.blocked(Vector2(_px[i], _py[i]), q):
-			_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
-			return
+		_due[i] = _now + _rng.randf_range(COOL_MIN, COOL_MAX)
+		return 0
+	if organ != null and not organ.line_free(_px[i], _py[i], nx, ny):
+		_due[i] = _now + _rng.randf_range(COOL_MIN, COOL_MAX)
+		return 0
 	if _cell_count(nx, ny) >= cap:
-		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
-		return
+		_due[i] = _now + _rng.randf_range(COOL_MIN, COOL_MAX)
+		return 0
 	# 阻隔带：生效后不许穿过；闪烁期内穿过去只会被减速
 	# 跳跃链例外 —— 它是空中落点，不沿地面走，所以直接无视封堵
 	var bc := 0
 	if kind != KIND_CHAIN:
 		bc = _block_cross(_px[i], _py[i], nx, ny)
 		if bc == 1:
-			_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
-			return
+			_due[i] = _now + _rng.randf_range(COOL_MIN, COOL_MAX)
+			return 0
 	var cool_pen := 2.4 if bc == 2 else 1.0
 
 	# 只有带状会缓慢折线（圆盘各向同性，链走的是 _chain_spread）
@@ -545,12 +651,21 @@ func _do_spawn(i: int, bx: float, by: float, kind: int, cap: int, far: bool) -> 
 
 	var child := _spawn(nx, ny, _rng.randf_range(R_MIN, R_MAX), 0, kind, naxis, _pvid[i],
 		0.0, _rng.randf_range(COOL_MIN, COOL_MAX) * cool_pen)
-	# 落子失败（池满 / 恰好压在组织上）：只短暂重试，不能让这一支从此「停住」
-	_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX) if child >= 0 else _retry_cool()
+	# 落子失败（恰好压在组织上 / 池要扩容）：只短暂重试，不能让这一支从此「停住」
+	_due[i] = _now + (_rng.randf_range(COOL_MIN, COOL_MAX) if child >= 0 else _retry_cool())
+	return 1 if child >= 0 else 0
 
 # 一次没长成时的短暂重试间隔（远小于代际冷却）
+	return 1 if child >= 0 else 0
+
+
 func _retry_cool() -> float:
 	return _rng.randf_range(RETRY_MIN, RETRY_MAX)
+
+
+# 本地密度已经塞满时的长退避：这里再努力也长不出来，等玩家清出空间再说
+func _saturate_cool() -> float:
+	return _rng.randf_range(Satur_MIN, Satur_MAX)
 
 
 # 有符号夹角差，落在 [-PI, PI]；扇形左右两侧要分开取各自的射线长度，不能取绝对值
@@ -571,26 +686,34 @@ func _ang_diff(a: float, b: float) -> float:
 # ============================================================ 消除
 
 # 扇形清除：锥内 live 全部转尸体，返回命中数
+# 扇形清除：锥内 live 全部转尸体，返回命中数
+# 判命中与画扇形共用同一份「被墙截断到哪」的表：画得到的地方才清得到。
 func clear_fan(origin: Vector2, dir: Vector2, length: float, half_angle: float) -> int:
 	var rays := _fan_rays(origin, dir, length, half_angle)
-	var base_ang := dir.angle()
+	var dn := dir.normalized()
+	var cos_lim := cos(half_angle)
+	var len2 := length * length
 	var hit := 0
-	for i in range(TOTAL):
-		if _alive[i] == 0 or _ptype[i] != 0:
+	for i in range(_n):
+		if _ptype[i] != 0:
 			continue
 		var vx := _px[i] - origin.x
 		var vy := _py[i] - origin.y
-		var l := sqrt(vx * vx + vy * vy)
-		if l > length:
+		var l2 := vx * vx + vy * vy
+		if l2 > len2:
 			continue
-		if l < 0.001:
+		if l2 < 0.0001:
 			_to_corpse(i)
 			hit += 1
 			continue
-		var diff := _ang_signed(atan2(vy, vx), base_ang)
-		if diff > half_angle or diff < -half_angle:
+		# 先做廉价粗筛：背后 / 锥外直接丢，避免对整池调用 atan2
+		var dot := vx * dn.x + vy * dn.y
+		if dot <= 0.0:
 			continue
-		# 命中判定与射线共用同一份「被墙截断到哪」的表：画得到的地方才清得到
+		if dot * dot < l2 * cos_lim * cos_lim:
+			continue
+		var l := sqrt(l2)
+		var diff := _ang_signed(atan2(vy, vx), dn.angle())
 		var bucket := clampi(int(round((diff + half_angle) / (2.0 * half_angle) * float(JET_RAYS - 1))), 0, JET_RAYS - 1)
 		if l > rays[bucket]:
 			continue
@@ -662,14 +785,18 @@ func _band_reach(origin: Vector2, d: Vector2, limit: float) -> float:
 
 # 净化场：圆形范围内按数量配额逐帧清除（接触即消融）
 func purge_circle(center: Vector2, radius: float, max_n: int) -> int:
-	if max_n <= 0:
+	if max_n <= 0 or _n <= 0:
 		return 0
 	var r2 := radius * radius
 	var hit := 0
-	for i in range(TOTAL):
-		if hit >= max_n:
-			break
-		if _alive[i] == 0 or _ptype[i] != 0:
+	var visited := 0
+	while hit < max_n and visited < QUERY_BUDGET and _n > 0:
+		if _qc >= _n:
+			_qc = 0
+		var i := _qc
+		_qc += 1
+		visited += 1
+		if _ptype[i] != 0:
 			continue
 		var vx := _px[i] - center.x
 		var vy := _py[i] - center.y
@@ -679,18 +806,23 @@ func purge_circle(center: Vector2, radius: float, max_n: int) -> int:
 		hit += 1
 	return hit
 
+
 # 自动拾取用：吃掉范围内躺够 1 秒的尸体，返回它们的位置（供光点飞行用）
 func take_corpse_near(center: Vector2, radius: float, max_n: int) -> Array:
 	var out: Array = []
-	if max_n <= 0:
+	if max_n <= 0 or _n <= 0:
 		return out
 	var r2 := radius * radius
-	for i in range(TOTAL):
-		if out.size() >= max_n:
-			break
-		if _alive[i] == 0 or _ptype[i] != 1:
+	var visited := 0
+	while out.size() < max_n and visited < QUERY_BUDGET and _n > 0:
+		if _qc >= _n:
+			_qc = 0
+		var i := _qc
+		_qc += 1
+		visited += 1
+		if _ptype[i] != 1:
 			continue
-		if _plife[i] > CORPSE_LIFE - Balance.CORPSE_PICK_DELAY:
+		if _die[i] - _now > CORPSE_LIFE - Balance.CORPSE_PICK_DELAY:
 			continue
 		var vx := _px[i] - center.x
 		var vy := _py[i] - center.y
@@ -700,19 +832,24 @@ func take_corpse_near(center: Vector2, radius: float, max_n: int) -> Array:
 		_kill(i)
 	return out
 
+
 # 巨噬细胞回收：吃掉吸附范围内的尸体，换养分
 # 只收割「已经躺了 1 秒以上」的尸体，保证战场还能看到疤
 func harvest_circle(center: Vector2, radius: float, max_n: int) -> int:
-	if max_n <= 0:
+	if max_n <= 0 or _n <= 0:
 		return 0
 	var r2 := radius * radius
 	var got := 0
-	for i in range(TOTAL):
-		if got >= max_n:
-			break
-		if _alive[i] == 0 or _ptype[i] != 1:
+	var visited := 0
+	while got < max_n and visited < QUERY_BUDGET and _n > 0:
+		if _qc >= _n:
+			_qc = 0
+		var i := _qc
+		_qc += 1
+		visited += 1
+		if _ptype[i] != 1:
 			continue
-		if _plife[i] > CORPSE_LIFE - Balance.CORPSE_PICK_DELAY:
+		if _die[i] - _now > CORPSE_LIFE - Balance.CORPSE_PICK_DELAY:
 			continue
 		var vx := _px[i] - center.x
 		var vy := _py[i] - center.y
@@ -721,6 +858,7 @@ func harvest_circle(center: Vector2, radius: float, max_n: int) -> int:
 		_kill(i)
 		got += 1
 	return got
+
 
 # ============================================================ 阻隔带
 func add_fuse(center: Vector2) -> bool:
@@ -748,8 +886,8 @@ func minimap_snapshot(max_pts: int) -> Dictionary:
 	var stride_corpse := maxi(1, int(ceil(float(maxi(1, _n_corpse)) / float(float(max_pts) * 0.6))))
 	var cnt := 0
 	var ccnt := 0
-	for i in range(TOTAL):
-		if _alive[i] != 1:
+	for i in range(_n):
+		if _ptype[i] == 1 and _die[i] <= _now:
 			continue
 		if _ptype[i] == 0:
 			if _px[i] < mid:
@@ -785,8 +923,8 @@ func _tick_fuses(dt: float) -> void:
 	for f in _fuse:
 		f["t"] += dt
 		var c: Vector2 = f["c"]
-		for i in range(TOTAL):
-			if _alive[i] == 0 or _ptype[i] != 0:
+		for i in range(_n):
+			if _ptype[i] != 0:
 				continue
 			var vx := _px[i] - c.x
 			var vy := _py[i] - c.y
@@ -935,7 +1073,7 @@ func _kind_color(kind: int) -> Color:
 
 func _write_slot(i: int) -> void:
 	var o := i * 12
-	if _alive[i] == 0:
+	if i < 0 or i >= _n:
 		_buf[o] = 0.0
 		_buf[o + 5] = 0.0
 		_buf[o + 11] = 0.0
@@ -943,7 +1081,7 @@ func _write_slot(i: int) -> void:
 	var s := _pr[i] * 2.0
 	var col := _kind_color(_pkind[i])
 	if _ptype[i] == 1:
-		var k := clampf(_plife[i] / CORPSE_LIFE, 0.0, 1.0)
+		var k := clampf((_die[i] - _now) / CORPSE_LIFE, 0.0, 1.0)
 		col = Color(COL_CORPSE.r, COL_CORPSE.g, COL_CORPSE.b, COL_CORPSE.a * (0.35 + 0.65 * k))
 	# TRANSFORM_2D：8 浮点变换 + 4 浮点颜色
 	_buf[o + 0] = s

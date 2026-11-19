@@ -63,7 +63,8 @@ func _ready() -> void:
 	Engine.max_fps = 0
 	_shot = (OS.get_cmdline_user_args().has("--shot")
 		or OS.get_cmdline_user_args().has("--overview")
-		or OS.get_cmdline_user_args().has("--walk"))
+		or OS.get_cmdline_user_args().has("--walk")
+		or OS.get_cmdline_user_args().has("--stress"))
 	map_seed = _parse_seed()
 
 	_build()
@@ -452,6 +453,32 @@ func _shot_sequence() -> void:
 		cam.reset_smoothing()
 		await get_tree().create_timer(0.80).timeout
 		_save("res://overview.png")
+		get_tree().quit()
+		return
+	# 压力测试（-- --stress）：只跑模拟，量「病毒几万颗时单帧还撑不撑得住」
+	if OS.get_cmdline_user_args().has("--stress"):
+		var frames := 3600
+		pop.prof_enabled = true
+		var sum := 0.0
+		var worst := 0.0
+		for k in range(frames):
+			var t0 := Time.get_ticks_usec()
+			pop.tick(1.0 / 60.0)
+			var used := float(Time.get_ticks_usec() - t0) / 1000.0
+			sum += used
+			worst = maxf(worst, used)
+			if k % 60 == 59:
+				print("[STRESS] t=%ds live=%d corpse=%d slot=%d avg=%.2fms worst=%.2fms | sweep=%.2f upload=%.2f rep=%.2f(n=%d scan=%d)" % [
+					(k + 1) / 60, pop.live_count(), pop.corpse_count(), pop.slot_count(), sum / 60.0, worst,
+					float(pop.prof_sweep_us) / 1000.0, float(pop.prof_upload_us) / 1000.0,
+					float(pop.prof_rep_us) / 1000.0, pop.prof_rep_n, pop.prof_scan_n])
+				pop.prof_sweep_us = 0
+				pop.prof_upload_us = 0
+				pop.prof_rep_us = 0
+				pop.prof_rep_n = 0
+				pop.prof_scan_n = 0
+				sum = 0.0
+				worst = 0.0
 		get_tree().quit()
 		return
 	# 贴墙滑行自测（-- --walk）：新逻辑 vs 旧「只走一个轴」逻辑，同样斜推 3 秒

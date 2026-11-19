@@ -649,6 +649,34 @@ func solid_point(p: Vector2) -> bool:
 	return _solid[_cell_of(p)] == 1
 
 
+# 逐点采样版的「线段是否撞墙」：只查栅格，不碰轮廓段，给病毒繁殖这种每帧上千次的调用用。
+# 采样步长取 PIX*3 ≈ 24 单位，比隔膜最薄处（MIN_SEPTUM 46）细，不会穿墙。
+func line_free(x0: float, y0: float, x1: float, y1: float) -> bool:
+	var dx := x1 - x0
+	var dy := y1 - y0
+	var steps := int(sqrt(dx * dx + dy * dy) / 24.0)
+	if steps < 1:
+		steps = 1
+	for k in range(1, steps + 1):
+		var t := float(k) / float(steps)
+		var i := int((x0 + dx * t) / PIX)
+		var j := int((y0 + dy * t) / PIX)
+		if i < 0 or j < 0 or i >= _mw or j >= _mh:
+			return false
+		if _solid[j * _mw + i] == 1:
+			return false
+	return true
+
+
+# 单个点是否实心（不做 Vector2 装箱，循环里更省）
+func solid_xy(x: float, y: float) -> bool:
+	var i := int(x / PIX)
+	var j := int(y / PIX)
+	if i < 0 or j < 0 or i >= _mw or j >= _mh:
+		return true
+	return _solid[j * _mw + i] == 1
+
+
 # 给渲染层用：第 i 条轮廓是否闭合（不闭合的画的时候不要首尾相连）
 func loop_is_closed(i: int) -> bool:
 	if i < 0 or i >= _loop_closed.size():
