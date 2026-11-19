@@ -103,6 +103,7 @@ func _build() -> void:
 	# 相机：地图比屏幕大得多，镜头跟着免疫单元走
 	cam = Camera2D.new()
 	cam.name = "Cam"
+	cam.zoom = Vector2(0.72, 0.72)      # 一屏约能看到叶子的三分之一，肺形才看得出来
 	cam.position_smoothing_enabled = true
 	cam.position_smoothing_speed = 9.0
 	add_child(cam)
@@ -165,10 +166,12 @@ func _gen_map() -> void:
 		mini.map = _map
 		mini.tex = view.map_texture()
 	if cam != null:
-		cam.limit_left = 0
-		cam.limit_top = 0
-		cam.limit_right = int(_map.size.x)
-		cam.limit_bottom = int(_map.size.y)
+		# 限位到「器官本身」的范围，别让镜头跑到体腔外的空地上
+		var ob: Rect2 = _map.organ_bounds
+		cam.limit_left = int(maxf(0.0, ob.position.x - 60.0))
+		cam.limit_top = int(maxf(0.0, ob.position.y - 60.0))
+		cam.limit_right = int(minf(_map.size.x, ob.end.x + 60.0))
+		cam.limit_bottom = int(minf(_map.size.y, ob.end.y + 60.0))
 		cam.position = player
 		cam.reset_smoothing()
 	# 可达率用「真实碰撞口径」：玩家碰撞按 0.72R 算，这里阈值同步
@@ -207,7 +210,8 @@ func _reseed(roll_map: bool) -> void:
 # 开局站在左肺门：支气管刚插进左叶的那个口子，出门就是肺泡区
 func _pick_start() -> Vector2:
 	var mid_x: float = _map.size.x * 0.5
-	var p: Vector2 = _map.nearest_free(Vector2(mid_x - 150.0, _map.size.y * 0.5), 300.0)
+	# 左肺门：主支气管刚插进左叶的位置（和 LungGen 的 hilar 对齐）
+	var p: Vector2 = _map.nearest_free(Vector2(mid_x - 246.0, _map.size.y * 0.315), 320.0)
 	if p.x < 0.0:
 		p = _pick_near_center()
 	return p

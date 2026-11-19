@@ -35,7 +35,13 @@ var build_ms := 0
 var free_ratio := 0.0
 var shape_count := 0
 
+# 器官外形：流明会被裁进这些形状的并集里。
+# 不给就是整块矩形场地；给了就是「肺 / 肾 / 心」本来的那个轮廓。
+var clip_shapes: Array = []
+var organ_bounds := Rect2()        # 器官（可通行区）包围盒，相机限位用
+
 var _shapes: Array = []            # [kind, a, b, r]，kind 0 = 圆，1 = 胶囊
+var _in := PackedByteArray()       # 1 = 在器官外形内
 var _buckets := {}                 # 粗格索引 -> Array[int]
 var _sidx := {}                    # 形状索引：粗格 -> Array[int]
 var _sw := 0
@@ -54,6 +60,15 @@ var _walk_th := -1.0
 
 func add_circle(c: Vector2, r: float) -> void:
 	_shapes.append([0, c, c, r])
+
+
+# 器官外形（裁剪用）：只管轮廓，不会自己变成流明
+func add_clip_circle(c: Vector2, r: float) -> void:
+	clip_shapes.append([0, c, c, r])
+
+
+func add_clip_capsule(a: Vector2, b: Vector2, r: float) -> void:
+	clip_shapes.append([1, a, b, r])
 
 
 func add_capsule(a: Vector2, b: Vector2, r: float) -> void:
@@ -134,6 +149,7 @@ func build() -> void:
 	var t0 := Time.get_ticks_msec()
 	shape_count = _shapes.size()
 	_rasterize()
+	_compute_bounds()
 	_distance_field()
 	_build_shape_index()
 	_build_contours()
@@ -147,7 +163,6 @@ func _rasterize() -> void:
 	_mh = int(ceil(size.y / PIX))
 	_solid.resize(_mw * _mh)
 	_solid.fill(1)
-	var free := 0
 	for s in _shapes:
 		var r := float(s[3])
 		var aabb := Rect2(s[1], Vector2.ZERO).expand(s[2]).grow(r)
@@ -165,8 +180,113 @@ func _rasterize() -> void:
 					inside = _pt_seg_dist(p, s[1], s[2]) <= r
 				if inside and _solid[j * _mw + i] == 1:
 					_solid[j * _mw + i] = 0
-					free += 1
-	free_ratio = float(free) / float(_mw * _mh)
+
+	# 器官外层裁剪：不在器官轮廓里的格子一律算实心（胸壁 / 体腔）
+	if not clip_shapes.is_empty():
+		_rasterize_clip()
+		for k in range(_solid.size()):
+			if _solid[k] == 0 and _in[k] == 0:
+				_solid[k] = 1
+
+	var free := 0
+	for k in range(_solid.size()):
+		if _solid[k] == 0:
+			free += 1
+	free_ratio = float(free) / float(_solid.size())
+
+
+# 器官轮廓刷成 _in 掩码（1 = 在器官内）
+func _rasterize_clip() -> void:
+	_in.resize(_mw * _mh)
+	_in.fill(0)
+	for s in clip_shapes:
+		var r2 := float(s[3])
+		var aabb2 := Rect2(s[1], Vector2.ZERO).expand(s[2]).grow(r2)
+		var a0 := clampi(int(aabb2.position.x / PIX), 0, _mw - 1)
+		var a1 := clampi(int((aabb2.position.x + aabb2.size.x) / PIX), 0, _mw - 1)
+		var b0 := clampi(int(aabb2.position.y / PIX), 0, _mh - 1)
+		var b1 := clampi(int((aabb2.position.y + aabb2.size.y) / PIX), 0, _mh - 1)
+		for j in range(b0, b1 + 1):
+			for i in range(a0, a1 + 1):
+				var p2 := Vector2((float(i) + 0.5) * PIX, (float(j) + 0.5) * PIX)
+				var ins := false
+				if s[0] == 0:
+					ins = p2.distance_squared_to(s[1]) <= r2 * r2
+				else:
+					ins = _pt_seg_dist(p2, s[1], s[2]) <= r2
+				if ins:
+					_in[j * _mw + i] = 1
+
+
+# 到器官外边界的距离（0 = 在轮廓上，>0 = 在外），用于「不要把肺泡摆到体外」
+func clip_sdf(p: Vector2) -> float:
+	if clip_shapes.is_empty():
+		return -1.0
+	var best := 1.0e9
+	for s in clip_shapes:
+		var d := 0.0
+		if s[0] == 0:
+			d = maxf(0.0, p.distance_to(s[1]) - float(s[3]))
+		else:
+			d = maxf(0.0, _pt_seg_dist(p, s[1], s[2]) - float(s[3]))
+		best = minf(best, d)
+	return best
+
+
+# 该格是否在器官轮廓内（build 之后可用）
+# 从器官内部某点到「器官边界」的距离（不在器官内返回 -1）。
+# 用于生成器：贴边的肺泡按这个距离缩径，于是肺泡能一直铺到胸膜，边缘不是锯齿。
+func clip_inside_dist(p: Vector2) -> float:
+	if clip_shapes.is_empty():
+		return 1.0e9
+	var best := -1.0e9
+	for s in clip_shapes:
+		var kind: int = int(s[0])
+		var d := 0.0
+		if kind == 0:
+			d = (p as Vector2).distance_to(s[1] as Vector2)
+		else:
+			d = _dist_point_seg(p, s[1] as Vector2, s[2] as Vector2)
+		var inside: float = float(s[3]) - d
+		if inside > best:
+			best = inside
+	return best
+
+
+func _dist_point_seg(p: Vector2, a: Vector2, b: Vector2) -> float:
+	var ab := b - a
+	var l2 := ab.length_squared()
+	if l2 < 0.0001:
+		return p.distance_to(a)
+	var t := clampf((p - a).dot(ab) / l2, 0.0, 1.0)
+	return p.distance_to(a + ab * t)
+
+
+func in_organ_cell(i: int, j: int) -> bool:
+	if _in.is_empty():
+		return true
+	if i < 0 or j < 0 or i >= _mw or j >= _mh:
+		return false
+	return _in[j * _mw + i] == 1
+
+
+# 可通行区的包围盒（相机限位 / 小地图用）
+func _compute_bounds() -> void:
+	var mn := Vector2(1.0e9, 1.0e9)
+	var mx := Vector2(-1.0e9, -1.0e9)
+	for j in range(_mh):
+		for i in range(_mw):
+			if _solid[j * _mw + i] != 0:
+				continue
+			var p := Vector2(float(i) * PIX, float(j) * PIX)
+			mn.x = minf(mn.x, p.x)
+			mn.y = minf(mn.y, p.y)
+			mx.x = maxf(mx.x, p.x + PIX)
+			mx.y = maxf(mx.y, p.y + PIX)
+	if mn.x > mx.x:
+		organ_bounds = Rect2(Vector2.ZERO, size)
+	else:
+		organ_bounds = Rect2(mn, mx - mn)
 
 
 # 两遍倒角距离变换：每个格子到最近实心格的距离（像素）

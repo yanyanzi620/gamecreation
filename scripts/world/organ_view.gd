@@ -15,9 +15,9 @@ extends Node2D
 #      画法怎么换都不影响玩法
 # ============================================================
 
-const COL_TISSUE := Color(0.235, 0.155, 0.175)
+const COL_TISSUE := Color(0.285, 0.175, 0.200)
 const COL_TISSUE_DEEP := Color(0.125, 0.09, 0.105)
-const COL_LUMEN := Color(0.098, 0.135, 0.168)
+const COL_LUMEN := Color(0.125, 0.180, 0.230)
 const COL_WALL := Color(0.58, 0.34, 0.38)
 const COL_WALL_GLOW := Color(0.70, 0.30, 0.36, 0.20)
 
@@ -46,6 +46,9 @@ func _bake() -> ImageTexture:
 	var img := Image.create(ms.x, ms.y, false, Image.FORMAT_RGBA8)
 	for j in range(ms.y):
 		for i in range(ms.x):
+			if not map.in_organ_cell(i, j):
+				img.set_pixel(i, j, Color(0.0, 0.0, 0.0, 0.0))
+				continue
 			var c := COL_TISSUE
 			if not map.solid_cell(i, j):
 				c = COL_LUMEN
@@ -88,4 +91,4 @@ func _draw() -> void:
 		draw_arc(dc, dr * 0.62, 0.0, TAU, 14, Color(0.30, 0.19, 0.22, 0.40), 1.0)
 
 	# 场地边框
-	draw_rect(rect, Color(0.36, 0.23, 0.27), false, 3.0)
+	# 场地边框不画：地图的形状由器官轮廓决定，再画一个方框就把肺形说回来了
