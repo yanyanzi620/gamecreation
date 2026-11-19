@@ -18,14 +18,16 @@ class_name OrganMap
 # ============================================================
 
 const CELL := 30.0        # 墙段分桶用的粗格（与病毒种群同格）
-const PIX := 6.0          # 掩码 / 距离场的分辨率
+const PIX := 8.0          # 掩码 / 距离场的分辨率
 const SIMPLIFY_EPS := 2.0 # 轮廓简化容差（像素）
 const CONTOUR_STEP := 20.0 # 轮廓采样步长（比 CELL 细，边缘更圆）
 const SHAPE_CELL := 64.0   # 形状索引粗格（加速 sdf 查询）
 
 var size := Vector2(1600.0, 1000.0)
 
-var loops: Array = []              # Array[PackedVector2Array]
+var loops: Array = []              # Array[PackedVector2Array]  可通行区的轮廓（肉壁）
+var clip_loops: Array = []         # 器官外轮廓（胸膜线），纯视觉：让人一眼看出这是肺
+var _clip_closed: Array = []
 var open_loop_count := 0           # 未闭合轮廓数（>0 说明地图被场地边界切开了）
 var seg_a := PackedVector2Array()
 var seg_b := PackedVector2Array()
@@ -378,6 +380,65 @@ func _build_contours() -> void:
 		_loop_closed.append(item[1])
 		if not item[1]:
 			open_loop_count += 1
+
+
+# 器官外轮廓（胸膜线）：对 clip_inside_dist 取 0 等值线，和肉壁轮廓同一套行进方块。
+# 只用于渲染 —— 让「这是一片肺叶」的形状成立，而不是一团毛边。
+func build_clip_contours() -> void:
+	clip_loops = []
+	_clip_closed = []
+	if clip_shapes.is_empty():
+		return
+	var step := 32.0
+	var w := int(ceil(size.x / step))
+	var h := int(ceil(size.y / step))
+	var vx := w + 1
+	var vy := h + 1
+	var vals := PackedFloat32Array()
+	vals.resize(vx * vy)
+	for j in range(vy):
+		for i in range(vx):
+			vals[j * vx + i] = -clip_inside_dist(Vector2(float(i) * step, float(j) * step))
+
+	var segs: Array = []
+	for j in range(h):
+		for i in range(w):
+			var a := vals[j * vx + i]
+			var b := vals[j * vx + i + 1]
+			var c := vals[(j + 1) * vx + i + 1]
+			var d := vals[(j + 1) * vx + i]
+			var x0 := float(i) * step
+			var y0 := float(j) * step
+			var pts: Array = []
+			if (a < 0.0) != (b < 0.0):
+				pts.append([0, Vector2(x0 + step * (a / (a - b)), y0)])
+			if (b < 0.0) != (c < 0.0):
+				pts.append([1, Vector2(x0 + step, y0 + step * (b / (b - c)))])
+			if (d < 0.0) != (c < 0.0):
+				pts.append([2, Vector2(x0 + step * (d / (d - c)), y0 + step)])
+			if (a < 0.0) != (d < 0.0):
+				pts.append([3, Vector2(x0, y0 + step * (a / (a - d)))])
+			if pts.size() == 2:
+				segs.append([pts[0][1], pts[1][1]])
+			elif pts.size() == 4:
+				var center_inside := ((a + b + c + d) * 0.25) < 0.0
+				if center_inside:
+					segs.append([pts[0][1], pts[1][1]])
+					segs.append([pts[2][1], pts[3][1]])
+				else:
+					segs.append([pts[0][1], pts[3][1]])
+					segs.append([pts[1][1], pts[2][1]])
+
+	for item in _split_pinches(_stitch(segs)):
+		var lp: PackedVector2Array = item[0]
+		if lp.size() < 3:
+			continue
+		clip_loops.append(lp)
+		_clip_closed.append(item[1])
+
+
+func clip_loop_is_closed(i: int) -> bool:
+	return i >= 0 and i < _clip_closed.size() and bool(_clip_closed[i])
 
 
 # 行进方块在鞍点处会让两条子轮廓在一个点上相触，

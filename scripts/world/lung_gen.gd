@@ -28,44 +28,53 @@ class_name LungGen
 
 # ---- 肺泡泡沫 ----
 # 配比口径：肺泡直径 2R ≈ 140，玩家直径 44 -> 面积占比 ≈ (22/70)^2 ≈ 10%
-const ALV_R_MIN := 78.0
-const ALV_R_MAX := 88.0
-const ALV_JITTER_POS := 12.0
+const ALV_R_MIN := 70.0
+const ALV_R_MAX := 80.0
+const ALV_JITTER_POS := 11.0
 const ALV_JITTER_R := 0.03
-const MIN_SEPTUM := 52.0        # 隔膜必须比门宽，肉壁才连得成网
+const MIN_SEPTUM := 46.0        # 隔膜必须比门宽，肉壁才连得成网
 const NEIGHBOR_RANGE := 1.16    # 以节距为单位，认定「相邻」的距离
 
 # ---- 连接管（玩家可走）----
 # 门宽随机：细门只够玩家侧身挤过，粗门能让病毒整股涌进去 —— 同一张图里有宽有窄才有机动感。
 # 下限按玩家碰撞半径卡死（0.72 * PLAYER_R(30) = 21.6），再小玩家就永远过不去。
-const DUCT_R_MIN := 22.0        # 门宽 44：刚刚容得下玩家
-const DUCT_R_MAX := 38.0        # 门宽 76：大通道，扩散会顺着它走，但不会宽到把整排骨腔糊成一条
+const DUCT_R_MIN := 20.0        # 门宽 40：刚才容得下玩家（0.72 * 26 = 18.7）
+const DUCT_R_MAX := 34.0        # 门宽 68：大通道，扩散会顺着它走，但不会宽到把整排骨腔糊成一条
 const EXTRA_LINK_CHANCE := 0.22 # 生成树之外再开这么多旁门，形成环路
 
 # ---- 孔隙（只有病毒能过）----
-const PORE_R_MIN := 9.0
-const PORE_R_MAX := 15.0
-const PORE_RANGE := 18.0
+const PORE_R_MIN := 8.0
+const PORE_R_MAX := 13.0
+const PORE_RANGE := 16.0
 const PORE_CHANCE := 0.45
 
 # ---- 支气管主干 ----
 const TRUNK_R := 88.0           # 气管半径（176 宽）
-const BRANCH_R := 56.0          # 肺门分支半径（112 宽）
+const BRANCH_R := 52.0          # 肺门分支半径（104 宽）
 const BRANCH_COUNT := 3         # 每侧分支数，合计 6 个肺门
 
 # ---- 器官轮廓（按 3040×1320 写死，运行时按实际尺寸缩放）----
 # 每个节点 = [x, y, r]：一个"肉块圆"。左叶沿脊柱上小下大；右叶镜像。
-const SIL_BASE := Vector2(4300.0, 1260.0)
+const SIL_BASE := Vector2(6200.0, 2300.0)
+# 叶形是「上宽下窄」（按需求方口径）。真解剖学是肺尖窄、肺底宽 —— 想换回真实解剖把这里改 true 即可，
+# SIL_SHAPES 的 y 会整体上下镜像，肺泡撒点跟着走，不用改别的。
+const SIL_FLIP_Y := false
 # 叶形：肺尖很窄 -> 往下逐渐变宽 -> 最宽处在 60% 高度 -> 向肺底收成圆角。
 # 用一串半径递增/递减的圆拼，而不是一个大圆（大圆会变成一个球，看不出是肺）。
 # 叶形不再用「一串圆」拼（圆一多就变成球，看不出是肺）。
 # 下面是一串圆形 + 胶囊，按真实肺的比例摆：肺尖窄 -> 上段细长 -> 中段变宽 -> 肺底最宽并收成圆角。
 # 格式：圆 = [0, x, y, 0, 0, r]；胶囊 = [1, ax, ay, bx, by, r]；右叶自动镜像。
 const SIL_SHAPES := [
-	[0, 1120.0, 232.0, 0.0, 0.0, 132.0],         # 肺尖（窄，靠内）
-	[1, 900.0, 330.0, 1210.0, 520.0, 250.0],     # 上段（细长，宽约 560）
-	[1, 700.0, 660.0, 1500.0, 800.0, 330.0],     # 中段（横向铺开，宽约 1100）
-	[1, 700.0, 990.0, 1520.0, 1050.0, 250.0],    # 肺底（最宽约 1070，收圆角）
+	# 上宽下窄的叶形：每一「排」是一条水平胶囊，宽度自上而下逐级收窄，
+	# 圆顶靠最上面一排的圆角收出来，底部收成小叶尖 —— 不是一根柱子，也不是一个球。
+	[1, 650.0, 380.0, 2550.0, 380.0, 200.0],     # 肺尖（宽 2300，最上、最宽）
+	[1, 670.0, 650.0, 2530.0, 650.0, 250.0],     # 上段（2360）
+	[1, 780.0, 950.0, 2420.0, 950.0, 300.0],     # 上中段（2240）
+	[1, 900.0, 1250.0, 2300.0, 1250.0, 300.0],   # 中段（2000）
+	[1, 1040.0, 1550.0, 2160.0, 1550.0, 260.0],  # 下段（1640）
+	[1, 1200.0, 1800.0, 2000.0, 1800.0, 220.0],  # 下段（1240）
+	[1, 1360.0, 2000.0, 1840.0, 2000.0, 180.0],  # 肺底（840）
+	[1, 1480.0, 2130.0, 1720.0, 2130.0, 140.0],  # 肺底尖（520，收圆角）
 ]
 # 气管 / 主支气管不在这里：它们自带轮廓（见 _airway），否则纵隔会被填成一根柱子
 
@@ -85,8 +94,8 @@ func build(seed_value: int, size: Vector2) -> OrganMap:
 
 	# ---------------------------------------------------------- 0.5) 两叶的肺泡
 	# 两叶的格子范围（叶形本身由轮廓决定，这里只是撒点的范围）
-	_lobe(m, rng, Rect2(360.0, 180.0, 1620.0, 1010.0))
-	_lobe(m, rng, Rect2(size.x - 1980.0, 180.0, 1620.0, 1010.0))
+	_lobe(m, rng, Rect2(470.0, 240.0, 2160.0, 1960.0))
+	_lobe(m, rng, Rect2(size.x - 2630.0, 240.0, 2160.0, 1960.0))
 
 	# ---------------------------------------------------------- 1) 支气管主干
 	_airway(m, rng, size)
@@ -117,17 +126,23 @@ func _silhouette(m: OrganMap, size: Vector2) -> void:
 	var kx: float = size.x / SIL_BASE.x
 	var ky: float = size.y / SIL_BASE.y
 	var kr: float = (kx + ky) * 0.5
+	var cy := SIL_BASE.y * 0.5
 
 	for n in SIL_SHAPES:
 		var r := float(n[5]) * kr
+		var sy2 := float(n[2])
+		var sy4 := float(n[4])
+		if SIL_FLIP_Y:
+			sy2 = cy * 2.0 - sy2
+			sy4 = cy * 2.0 - sy4
 		if int(n[0]) == 0:
-			var p := Vector2(float(n[1]) * kx, float(n[2]) * ky)
+			var p := Vector2(float(n[1]) * kx, sy2 * ky)
 			r = minf(r, minf(p.y - 44.0, size.y - p.y - 44.0))   # 不许顶到场地上下边
 			m.add_clip_circle(p, r)
 			m.add_clip_circle(Vector2(size.x - p.x, p.y), r)      # 右叶镜像
 		else:
-			var a := Vector2(float(n[1]) * kx, float(n[2]) * ky)
-			var b := Vector2(float(n[3]) * kx, float(n[4]) * ky)
+			var a := Vector2(float(n[1]) * kx, sy2 * ky)
+			var b := Vector2(float(n[3]) * kx, sy4 * ky)
 			# 胶囊两端都要留边距，否则肺底会被场地边切平、轮廓出现开口
 			var room := 1.0e9
 			for p2 in [a, b]:
@@ -322,15 +337,15 @@ func _airway(m: OrganMap, rng: RandomNumberGenerator, size: Vector2) -> void:
 	var kx: float = size.x / SIL_BASE.x
 
 	# 1) 气管：从上方进来，短短一截就分叉（解剖上气管在肺外，所以它自带轮廓）
-	var t_top := Vector2(mid_x, size.y * 0.070)
-	var carina := Vector2(mid_x, size.y * 0.215)
-	m.add_circle(t_top + Vector2(0.0, 26.0), 112.0)
+	var t_top := Vector2(mid_x, size.y * 0.060)
+	var carina := Vector2(mid_x, size.y * 0.205)
+	m.add_circle(t_top + Vector2(0.0, 30.0), 116.0)
 	m.add_capsule(t_top, carina, TRUNK_R)
 	m.add_clip_capsule(t_top, carina, TRUNK_R + 30.0)
 
 	# 2) 左右主支气管：从隆突斜插进各自肺门，这一段是两叶唯一的通道
 	for side in [-1.0, 1.0]:
-		var hilar := Vector2(mid_x + side * 330.0 * kx, size.y * 0.330)
+		var hilar := Vector2(mid_x + side * 430.0 * kx, size.y * 0.310)
 		m.add_capsule(carina, hilar, BRANCH_R)
 		m.add_clip_capsule(carina, hilar, BRANCH_R + 26.0)
 

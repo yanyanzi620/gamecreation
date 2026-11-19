@@ -3,7 +3,7 @@ extends SceneTree
 # 跑法：<godot_console> --headless --path E:\gamecreation --script res://scripts/debug/map_probe.gd
 
 func _init() -> void:
-	var m: OrganMap = LungGen.new().build(20261119, Vector2(3040.0, 1320.0))
+	var m: OrganMap = LungGen.new().build(20261119, Vector2(Balance.ARENA_W, Balance.ARENA_H))
 	print("free_ratio=%.1f%% shapes=%d loops=%d" % [m.free_ratio * 100.0, m.shape_count, m.loops.size()])
 
 	var ms: Vector2i = m.mask_size()

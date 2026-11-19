@@ -36,6 +36,9 @@ func map_texture() -> Texture2D:
 
 func set_map(m) -> void:
 	map = m
+	# 胸膜线只给渲染用，放在这里算（不进 map.build 的计时预算）
+	if map.clip_loops.is_empty():
+		map.build_clip_contours()
 	_baked = _bake()
 	queue_redraw()
 
@@ -82,6 +85,20 @@ func _draw() -> void:
 		if map.loop_is_closed(i):
 			ring2.append(Vector2(loop2[0]))
 		draw_polyline(ring2, COL_WALL, 2.5, true)
+
+	# 胸膜线：器官本体的外轮廓（肺泡贴着它长，所以线条压在最外圈肺泡上）
+	for i in range(map.clip_loops.size()):
+		var pl: PackedVector2Array = map.clip_loops[i]
+		var pr: PackedVector2Array = pl.duplicate()
+		if map.clip_loop_is_closed(i):
+			pr.append(pl[0])
+		draw_polyline(pr, Color(0.62, 0.30, 0.36, 0.35), 12.0, true)
+	for i in range(map.clip_loops.size()):
+		var pl2: PackedVector2Array = map.clip_loops[i]
+		var pr2: PackedVector2Array = pl2.duplicate()
+		if map.clip_loop_is_closed(i):
+			pr2.append(pl2[0])
+		draw_polyline(pr2, Color(0.86, 0.46, 0.52, 0.85), 2.6, true)
 
 	# 肉壁里的小肺泡纹理（纯视觉，美术到位后可以换成贴图）
 	for d in map.decor:
