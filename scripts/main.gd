@@ -61,7 +61,9 @@ func _ready() -> void:
 	# 窗口失焦 / 空闲时不要被降频（否则会「画面冻住，动一下鼠标才继续」）
 	OS.low_processor_usage_mode = false
 	Engine.max_fps = 0
-	_shot = OS.get_cmdline_user_args().has("--shot") or OS.get_cmdline_user_args().has("--overview")
+	_shot = (OS.get_cmdline_user_args().has("--shot")
+		or OS.get_cmdline_user_args().has("--overview")
+		or OS.get_cmdline_user_args().has("--walk"))
 	map_seed = _parse_seed()
 
 	_build()
@@ -204,6 +206,7 @@ func _reseed(roll_map: bool) -> void:
 
 	_rng.seed = map_seed
 	player = _pick_start()
+	print("[START] player=(%.0f,%.0f) solid=%s" % [player.x, player.y, str(_map.solid_point(player))])
 	if cam != null:
 		cam.position = player
 		cam.reset_smoothing()
@@ -327,21 +330,27 @@ func _place_fuse(target: Vector2) -> bool:
 
 # ============================================================ 移动
 
+# 撞墙就贴着墙走：把「想走的方向」往两侧掰，逐档试探，
+# 第一个走得通的当作这一帧的实际位移 —— 于是斜墙、凹角、肺泡内壁都顺滑。
+const SLIDE_DEG := [0.0, 16.0, -16.0, 34.0, -34.0, 52.0, -52.0, 70.0, -70.0, 88.0, -88.0]
+
 func _move_step(dir: Vector2, delta: float) -> void:
 	if dir.length() < 0.001:
 		return
-	var step := dir.normalized() * Balance.PLAYER_SPEED * delta
-	var np := player + step
-	if not pop.path_blocked(player, np):
-		player = np
-		_clamp_player()
-		return
-	# 撞墙 / 撞带：只走分量大的那一个轴，沿墙滑过去
-	if absf(step.x) >= absf(step.y):
-		if not pop.path_blocked(player, player + Vector2(step.x, 0.0)):
-			player += Vector2(step.x, 0.0)
-	elif not pop.path_blocked(player, player + Vector2(0.0, step.y)):
-		player += Vector2(0.0, step.y)
+	var base := dir.normalized()
+	var speed := Balance.PLAYER_SPEED * delta
+	for k in SLIDE_DEG:
+		var d := base.rotated(deg_to_rad(k))
+		var s := d * speed
+		if not pop.path_blocked(player, player + s):
+			player += s
+			_clamp_player()
+			return
+		# 半步再试一次：贴墙且目标是窄口时，避免整帧位移全部作废
+		if not pop.path_blocked(player, player + s * 0.5):
+			player += s * 0.5
+			_clamp_player()
+			return
 	_clamp_player()
 
 
@@ -445,6 +454,35 @@ func _shot_sequence() -> void:
 		_save("res://overview.png")
 		get_tree().quit()
 		return
+	# 贴墙滑行自测（-- --walk）：新逻辑 vs 旧「只走一个轴」逻辑，同样斜推 3 秒
+	if OS.get_cmdline_user_args().has("--walk"):
+		var p0: Vector2 = player
+		var dirn := Vector2(-1.0, -1.0).normalized()
+		var moved := 0.0
+		var last: Vector2 = player
+		for i in range(180):
+			_move_step(dirn, 1.0 / 60.0)
+			moved += player.distance_to(last)
+			last = player
+		var old_p: Vector2 = p0
+		var old_path := 0.0
+		var prev: Vector2 = old_p
+		var step := dirn * Balance.PLAYER_SPEED * (1.0 / 60.0)
+		for i in range(180):
+			prev = old_p
+			if not pop.path_blocked(old_p, old_p + step):
+				old_p += step
+			elif absf(step.x) >= absf(step.y):
+				if not pop.path_blocked(old_p, old_p + Vector2(step.x, 0.0)):
+					old_p += Vector2(step.x, 0.0)
+			elif not pop.path_blocked(old_p, old_p + Vector2(0.0, step.y)):
+				old_p += Vector2(0.0, step.y)
+			old_path += old_p.distance_to(prev)
+		print("[WALK] from=(%.0f,%.0f) slide_to=(%.0f,%.0f) path=%.0f | old_to=(%.0f,%.0f) path=%.0f | solid=%s" % [
+			p0.x, p0.y, player.x, player.y, moved, old_p.x, old_p.y, old_path,
+			str(_map.solid_point(player))])
+		get_tree().quit()
+		return
 	await get_tree().create_timer(0.60).timeout
 	# 站到第一个病毒团旁边，保证射流够得到（否则 hit 永远是 0）
 	var aim := Vector2.RIGHT
@@ -467,6 +505,9 @@ func _shot_sequence() -> void:
 	_fire(demo)
 	await get_tree().create_timer(0.55).timeout
 	_fire(demo)
+	# 射流残影只有 0.3 秒，必须开完立刻拍，才看得出「被墙截断」
+	await get_tree().create_timer(0.05).timeout
+	_save("res://jet_shot.png")
 	await get_tree().create_timer(0.85).timeout
 	_save("res://main_shot_a.png")
 	# 引信丢到正前方那团病毒里（能吸链、能清盘/带）

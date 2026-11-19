@@ -32,10 +32,14 @@ const VIRUS_MAX_CORPSE := 1800 # 尸体池上限；满了新尸体不生成
 # ★ 扩散速度的总闸门：复制冷却 = 代际时间
 #   调大 -> 整体变慢（最终密度不变，只是更晚长满）
 #   调小 -> 整体变快
-const VIRUS_COOL_MIN := 1.40
-const VIRUS_COOL_MAX := 2.50
+const VIRUS_COOL_MIN := 1.05
+const VIRUS_COOL_MAX := 1.85
 
 const VIRUS_PROBE_DIST := 30.0 # 探路距离，习惯上等于 CELL
+# 一次没长成时的重试间隔：必须远小于 VIRUS_COOL_*，否则小股病毒会「停好幾秒」
+const VIRUS_RETRY_MIN := 0.18
+const VIRUS_RETRY_MAX := 0.42
+const VIRUS_ESCAPE_PROBE := 60.0 # 兜底探路距离：本地长满时，允许往更远处挑一格空位
 const VIRUS_R_MIN := 6.0       # 粒子视觉半径下限
 const VIRUS_R_MAX := 10.0      # 粒子视觉半径上限；只影响观感，不影响碰撞
 
@@ -86,6 +90,7 @@ const JET_HALF_ANGLE_DEG := 16.0 # 半角；调大 = 扇形更宽、更容易扫
 const JET_COOLDOWN := 0.50       # 两发之间最短间隔
 const JET_VIS_SEC := 0.30        # 弹道残影停留时间（纯表现）
 const JET_ARC_STEPS := 18        # 扇形绘制细分（纯表现）
+const JET_RAYS := 15             # 射线数：射流被墙逐条截断的精度；调大 = 边缘更贴墙
 
 
 # ============================================================ 手段 · 净化场（贴身自动）

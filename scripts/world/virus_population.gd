@@ -57,6 +57,10 @@ const COOL_MAX := Balance.VIRUS_COOL_MAX
 const SPAWN_D_MIN := Balance.BLOB_SPAWN_D_MIN
 const SPAWN_D_MAX := Balance.BLOB_SPAWN_D_MAX
 const PROBE_DIST := Balance.VIRUS_PROBE_DIST
+const ESCAPE_PROBE := Balance.VIRUS_ESCAPE_PROBE
+const RETRY_MIN := Balance.VIRUS_RETRY_MIN
+const RETRY_MAX := Balance.VIRUS_RETRY_MAX
+const JET_RAYS := Balance.JET_RAYS
 
 # 跳跃链 = 单点传播：不粘连、不稳方向，只保证「整体往前推」
 # 每次繁殖在空中随机落一个点，点与点之间天然留空，视觉上不会糊成条带
@@ -110,6 +114,9 @@ var _free: Array[int] = []
 var _cell := PackedInt32Array()
 
 var _n_live := 0
+# 最近一次射流被墙截断后的外缘点（世界坐标），jet_system 直接拿来画
+var fan_shape := PackedVector2Array()
+var fan_origin := Vector2.ZERO
 var _n_corpse := 0
 var _kind_live := PackedInt32Array()
 var _v_origin: Array[Vector2] = []
@@ -398,6 +405,7 @@ func tick(dt: float) -> void:
 
 func _replicate(i: int) -> void:
 	if _n_live >= MAX_LIVE:
+		_pcool[i] = _retry_cool()
 		return
 
 	var kind := _pkind[i]
@@ -410,47 +418,55 @@ func _replicate(i: int) -> void:
 		return
 	var best := _pick_dir(i, kind, axis, cap, PI)
 	if not best[3]:
-		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
+		_pcool[i] = _retry_cool()
 		return
-	_do_spawn(i, best[1], best[2], kind, cap)
+	_do_spawn(i, best[1], best[2], kind, cap, best[4])
 
 # 在 max_diff 夹角范围内，挑「权重 × 剩余容量」最大的方向
 # 返回 [score, dx, dy, found]
 func _pick_dir(i: int, kind: int, axis: float, cap: int, max_diff: float) -> Array:
-	var best := -1.0
-	var bx := 0.0
-	var by := 0.0
-	var found := false
-	for k in range(8):
-		var ang := float(k) * PI * 0.25
-		if _ang_diff(ang, axis) > max_diff:
-			continue
-		var dx := cos(ang)
-		var dy := sin(ang)
-		var tx := _px[i] + dx * PROBE_DIST
-		var ty := _py[i] + dy * PROBE_DIST
-		if tx < ARENA_PAD or tx > ARENA_W - ARENA_PAD or ty < ARENA_PAD or ty > ARENA_H - ARENA_PAD:
-			continue
-		# 器官肉壁：这个方向长不过去
-		if organ != null and organ.blocked(Vector2(_px[i], _py[i]), Vector2(tx, ty)):
-			continue
-		# 生效的阻隔带把外面封死：这个方向不可选，
-		# 于是生长会自动沿带子走向两端，形成绕射
-		if _block_cross(_px[i], _py[i], tx, ty) == 1:
-			continue
-		var c := _cell_count(tx, ty)
-		if c >= cap:
-			continue
-		var sc := _dir_weight(kind, axis, ang) * float(cap - c)
-		if sc > best:
-			best = sc
-			bx = dx
-			by = dy
-			found = true
-		elif absf(sc - best) < 0.01 and _rng.randf() < 0.5:
-			bx = dx
-			by = dy
-	return [best, bx, by, found]
+	for pass_i in range(2):
+		# 第二遍把探路距离放到 ESCAPE_PROBE：本地格子长满时，还能往远处空位甩一颗，
+		# 否则「小股病毒坐在一个塞满的格子里」会一直不长，看起来像卡住
+		var pd := PROBE_DIST if pass_i == 0 else ESCAPE_PROBE
+		var best := -1.0
+		var bx := 0.0
+		var by := 0.0
+		var found := false
+		for k in range(8):
+			var ang := float(k) * PI * 0.25
+			if _ang_diff(ang, axis) > max_diff:
+				continue
+			var dx := cos(ang)
+			var dy := sin(ang)
+			var tx := _px[i] + dx * pd
+			var ty := _py[i] + dy * pd
+			if tx < ARENA_PAD or tx > ARENA_W - ARENA_PAD or ty < ARENA_PAD or ty > ARENA_H - ARENA_PAD:
+				continue
+			# 器官肉壁：这个方向长不过去
+			if organ != null and organ.blocked(Vector2(_px[i], _py[i]), Vector2(tx, ty)):
+				continue
+			# 生效的阻隔带把外面封死：这个方向不可选，
+			# 于是生长会自动沿带子走向两端，形成绕射
+			if _block_cross(_px[i], _py[i], tx, ty) == 1:
+				continue
+			var c := _cell_count(tx, ty)
+			if c >= cap:
+				continue
+			var sc := _dir_weight(kind, axis, ang) * float(cap - c)
+			if pass_i == 1:
+				sc = _dir_weight(kind, axis, ang) * 0.9
+			if sc > best:
+				best = sc
+				bx = dx
+				by = dy
+				found = true
+			elif absf(sc - best) < 0.01 and _rng.randf() < 0.5:
+				bx = dx
+				by = dy
+		if found:
+			return [best, bx, by, true, pass_i == 1]
+	return [0.0, 0.0, 0.0, false, false]
 
 func _chain_spread(i: int, axis: float) -> void:
 	# 往主轴前方 ±CHAIN_SPREAD_DEG 的扇形里随机落一个点。
@@ -484,12 +500,16 @@ func _chain_spread(i: int, axis: float) -> void:
 	_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
 
 # 真正落一个子粒子：抖动角度 + 随机步长 + 主轴缓慢折线
-func _do_spawn(i: int, bx: float, by: float, kind: int, cap: int) -> void:
+func _do_spawn(i: int, bx: float, by: float, kind: int, cap: int, far: bool) -> void:
 	var jitter := deg_to_rad(_rng.randf_range(-12.0, 12.0))
 	var nd := Vector2(bx, by).rotated(jitter)
 	var smin := SPAWN_D_MIN
 	var smax := SPAWN_D_MAX
-	if kind == KIND_BAND:
+	# 兜底档：本地塞满时往远处甩一颗，落点必须真的跨出拥挤区
+	if far:
+		smin = ESCAPE_PROBE * 0.85
+		smax = ESCAPE_PROBE * 1.15
+	elif kind == KIND_BAND:
 		smin = Balance.BAND_SPAWN_D_MIN
 		smax = Balance.BAND_SPAWN_D_MAX
 	var dist := _rng.randf_range(smin, smax)
@@ -521,10 +541,25 @@ func _do_spawn(i: int, bx: float, by: float, kind: int, cap: int) -> void:
 	if kind == KIND_BAND and _rng.randf() < AXIS_WANDER:
 		naxis = _pax[i] + deg_to_rad(_rng.randf_range(-WANDER_DEG_BAND, WANDER_DEG_BAND))
 
-	_spawn(nx, ny, _rng.randf_range(R_MIN, R_MAX), 0, kind, naxis, _pvid[i],
+	var child := _spawn(nx, ny, _rng.randf_range(R_MIN, R_MAX), 0, kind, naxis, _pvid[i],
 		0.0, _rng.randf_range(COOL_MIN, COOL_MAX) * cool_pen)
-	_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
+	# 落子失败（池满 / 恰好压在组织上）：只短暂重试，不能让这一支从此「停住」
+	_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX) if child >= 0 else _retry_cool()
 
+# 一次没长成时的短暂重试间隔（远小于代际冷却）
+func _retry_cool() -> float:
+	return _rng.randf_range(RETRY_MIN, RETRY_MAX)
+
+
+# 有符号夹角差，落在 [-PI, PI]；扇形左右两侧要分开取各自的射线长度，不能取绝对值
+func _ang_signed(a: float, b: float) -> float:
+	var d := fmod(a - b + PI, TAU)
+	if d < 0.0:
+		d += TAU
+	return d - PI
+
+
+# 有符号夹角差，落在 [-PI, PI]；扇形左右两侧要分开取各自的射线长度，不能取绝对值
 func _ang_diff(a: float, b: float) -> float:
 	var d := fmod(a - b + PI, TAU)
 	if d < 0.0:
@@ -535,29 +570,58 @@ func _ang_diff(a: float, b: float) -> float:
 
 # 扇形清除：锥内 live 全部转尸体，返回命中数
 func clear_fan(origin: Vector2, dir: Vector2, length: float, half_angle: float) -> int:
-	var dx := dir.x
-	var dy := dir.y
-	var cos_lim := cos(half_angle)
-	var l2max := length * length
+	var rays := _fan_rays(origin, dir, length, half_angle)
+	var base_ang := dir.angle()
 	var hit := 0
 	for i in range(TOTAL):
 		if _alive[i] == 0 or _ptype[i] != 0:
 			continue
 		var vx := _px[i] - origin.x
 		var vy := _py[i] - origin.y
-		var l2 := vx * vx + vy * vy
-		if l2 > l2max:
+		var l := sqrt(vx * vx + vy * vy)
+		if l > length:
 			continue
-		var l := sqrt(l2)
 		if l < 0.001:
 			_to_corpse(i)
 			hit += 1
 			continue
-		if (vx * dx + vy * dy) / l < cos_lim:
+		var diff := _ang_signed(atan2(vy, vx), base_ang)
+		if diff > half_angle or diff < -half_angle:
+			continue
+		# 命中判定与射线共用同一份「被墙截断到哪」的表：画得到的地方才清得到
+		var bucket := clampi(int(round((diff + half_angle) / (2.0 * half_angle) * float(JET_RAYS - 1))), 0, JET_RAYS - 1)
+		if l > rays[bucket]:
 			continue
 		_to_corpse(i)
 		hit += 1
 	return hit
+
+
+# 一条射流 = JET_RAYS 条射线，每条各自打到墙为止；返回每条射线的实际长度。
+# 同一份数据既判命中、又画被墙削掉的扇形，视觉和规则不会打架。
+func _fan_rays(origin: Vector2, dir: Vector2, length: float, half_angle: float) -> PackedFloat32Array:
+	var rays := PackedFloat32Array()
+	rays.resize(JET_RAYS)
+	var step := 12.0
+	var shape := PackedVector2Array()
+	for r in range(JET_RAYS):
+		var ang := -half_angle + 2.0 * half_angle * float(r) / float(JET_RAYS - 1)
+		var d := dir.rotated(ang)
+		var t := 0.0
+		var reach := length
+		while t < length - 0.01:
+			var a := origin + d * t
+			var b := origin + d * minf(t + step, length)
+			if organ != null and organ.blocked(a, b):
+				reach = t
+				break
+			t = minf(t + step, length)
+		rays[r] = reach
+		shape.append(origin + d * reach)
+	fan_shape = shape
+	fan_origin = origin
+	return rays
+
 
 # 净化场：圆形范围内按数量配额逐帧清除（接触即消融）
 func purge_circle(center: Vector2, radius: float, max_n: int) -> int:

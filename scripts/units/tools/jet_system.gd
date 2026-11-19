@@ -7,6 +7,7 @@ const HALF_ANGLE_DEG := Balance.JET_HALF_ANGLE_DEG
 const COOLDOWN := Balance.JET_COOLDOWN
 const VIS_SEC := Balance.JET_VIS_SEC
 const ARC_STEPS := Balance.JET_ARC_STEPS
+const RAY_COUNT := Balance.JET_RAYS
 
 var cooldown_left := 0.0
 var _flash := 0.0
@@ -39,6 +40,16 @@ func fire(from: Vector2, dir: Vector2) -> int:
 	_dir = d
 	_flash = VIS_SEC
 	_last_hit = _pop.clear_fan(_from, _dir, LENGTH, deg_to_rad(HALF_ANGLE_DEG))
+	if OS.get_cmdline_user_args().has("--shot"):
+		var clipped := 0
+		var max_reach := 0.0
+		for q in _pop.fan_shape:
+			var dq: float = q.distance_to(_from)
+			max_reach = maxf(max_reach, dq)
+			if dq < LENGTH - 1.0:
+				clipped += 1
+		print("[JET] rays=%d clipped=%d max_reach=%.0f/%.0f hit=%d" % [
+			_pop.fan_shape.size(), clipped, max_reach, LENGTH, _last_hit])
 	queue_redraw()
 	return _last_hit
 
@@ -57,17 +68,23 @@ func _draw() -> void:
 	var a := _flash / VIS_SEC
 	var half := deg_to_rad(HALF_ANGLE_DEG)
 
+	# 外缘用 pop 里那份「每条射线打到墙为止」的结果：打不穿墙，扇形就缺一块
+	var arc := PackedVector2Array()
+	if _pop != null and _pop.fan_shape.size() >= 3:
+		arc = _pop.fan_shape
+	else:
+		for k in range(RAY_COUNT):
+			var ang := -half + (2.0 * half) * float(k) / float(maxi(1, RAY_COUNT - 1))
+			arc.append(_from + _dir.rotated(ang) * LENGTH)
+
 	var pts := PackedVector2Array()
 	pts.append(_from)
-	for k in range(ARC_STEPS + 1):
-		var ang := -half + (2.0 * half) * float(k) / float(ARC_STEPS)
-		pts.append(_from + _dir.rotated(ang) * LENGTH)
+	for p in arc:
+		pts.append(p)
 	draw_colored_polygon(pts, Color(0.42, 0.94, 1.0, 0.20 * a))
 
-	var e0 := _from + _dir.rotated(-half) * LENGTH
-	var e1 := _from + _dir.rotated(half) * LENGTH
-	draw_line(_from, e0, Color(0.55, 1.0, 1.0, 0.55 * a), 2.0)
-	draw_line(_from, e1, Color(0.55, 1.0, 1.0, 0.55 * a), 2.0)
-	var base := _dir.angle()
-	draw_arc(_from, LENGTH, base - half, base + half, ARC_STEPS,
-		Color(0.55, 1.0, 1.0, 0.45 * a), 2.0)
+	# 外缘折线（被墙削掉的地方会明显断在墙上）
+	var edge := arc.duplicate()
+	draw_polyline(edge, Color(0.55, 1.0, 1.0, 0.55 * a), 2.0)
+	draw_line(_from, arc[0], Color(0.55, 1.0, 1.0, 0.35 * a), 1.5)
+	draw_line(_from, arc[arc.size() - 1], Color(0.55, 1.0, 1.0, 0.35 * a), 1.5)
