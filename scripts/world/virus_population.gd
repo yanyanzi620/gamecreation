@@ -70,6 +70,13 @@ const Satur_MAX := Balance.VIRUS_SATUR_COOL_MAX
 const JET_RAYS := Balance.JET_RAYS
 const JET_WALL_SKIN := Balance.JET_WALL_SKIN
 
+# 8 个候选方向的单位向量：探路每颗要 8~16 次，cos/sin 没必要每颗都算一遍
+const DIRV: Array[Vector2] = [
+	Vector2(1.0, 0.0), Vector2(0.70710678, 0.70710678),
+	Vector2(0.0, 1.0), Vector2(-0.70710678, 0.70710678),
+	Vector2(-1.0, 0.0), Vector2(-0.70710678, -0.70710678),
+	Vector2(0.0, -1.0), Vector2(0.70710678, -0.70710678)]
+
 # 跳跃链 = 单点传播：不粘连、不稳方向，只保证「整体往前推」
 # 每次繁殖在空中随机落一个点，点与点之间天然留空，视觉上不会糊成条带
 const CHAIN_SPREAD_DEG := Balance.CHAIN_SPREAD_DEG
@@ -134,8 +141,41 @@ var prof_scan_n := 0
 var _n := 0                           # 池里用了多少个槽（live + corpse 连续排在一起）
 var _cap := 0
 var _now := 0.0
-var _cur := 0                         # 模拟轮转游标
 var _qc := 0                          # 查询轮转游标（净化 / 拾取共用）
+
+# ------------------------------------------------------------ 调度（时间轮）
+# 设计目标：每帧的工作量正比于「这一帧到期了多少颗」，而不是「池里有多少颗」。
+#   _wheel   128 个桶，每桶 33ms，覆盖 4.26s（大于最长退避 3.4s），桶里存 uid
+#   _uid/_slot_of_uid  稳定身份 -> 槽位。槽位会被尾部交换挪动，uid 不会
+#   _pending 本帧因时间预算没处理完的 uid，下帧先补
+#   _cq      尸体 uid 的 FIFO：尸体寿命固定，所以到期顺序 == 入队顺序，不需要轮子
+# 没有「每帧扫全池」这条路径了 —— 几万颗时成本也只跟当帧到期量有关。
+var _uid := PackedInt32Array()
+var _uid_next := 1
+var _slot_of_uid: Dictionary = {}
+const WHEEL_N := 128
+const WHEEL_DT := 1.0 / 30.0
+var _wheel: Array = []
+var _wtick := 0
+var _pending: Array = []
+# 探路结果（_pick_dir 的出参）：避免每次繁殖都分配一个返回数组
+var _bdx := 0.0
+var _bdy := 0.0
+var _bfound := false
+var _bfar := false
+var _bsat := false
+# 肉壁栅格缓存（bind_organ 时填入），避免每颗病毒 8 次跨脚本调用
+var _osolid := PackedByteArray()
+var _omw := 0
+var _omh := 0
+const OPIX := 8.0
+# 粒子位置是静止的（只有出生 / 死亡 / 淡化会改实例），所以 MultiMesh 不必每帧整包上传：
+# 隔帧上传（30Hz）足够，射击击杀走 _force_upload 立即上传，命中反馈不延迟。
+var _up_phase := 0
+var _force_upload := true
+var _cq: Array = []
+var _cq_head := 0
+var _cq_fade := 0
 
 var _n_live := 0
 # 最近一次射流被墙截断后的外缘点（世界坐标），jet_system 直接拿来画
@@ -187,6 +227,9 @@ func _init_pool() -> void:
 	_cell.fill(0)
 	_kind_live.resize(KIND_COUNT)
 	_kind_live.fill(0)
+	if _wheel.is_empty():
+		for k in range(WHEEL_N):
+			_wheel.append([])
 	_grow_pool(CAP_INIT)
 
 # 扩池：整块 resize（PackedArray 的 resize 会保留旧内容，新尾巴自动填 0）
@@ -208,6 +251,7 @@ func _grow_pool(need: int) -> void:
 	_pax.resize(cap)
 	_ptype.resize(cap)
 	_pvid.resize(cap)
+	_uid.resize(cap)
 	_due.resize(cap)
 	_die.resize(cap)
 	_fade.resize(cap)
@@ -308,16 +352,21 @@ func arena_size() -> Vector2:
 # 接入器官地图：之后病毒的生长、越界、出生都会被肉壁限制
 func bind_organ(m) -> void:
 	organ = m
+	# 热路径优化：直接持有肉壁栅格的引用，繁殖探路内联查表。
+	# 栅格在建图时生成、之后不变，所以引用不会失效；地图重建时需要重新 bind_organ。
+	_osolid = m._solid
+	_omw = m._mw
+	_omh = m._mh
 
 # ============================================================ 池操作
 
 # 整场清空（重开用）：池、格子、尸体、阻隔带、引信全部归零
 func reset() -> void:
 	_n = 0
-	_cur = 0
 	_qc = 0
 	_now = 0.0
 	_buf.fill(0.0)
+	_force_upload = true
 	if _mmi != null:
 		_mmi.multimesh.buffer = _buf
 		_mmi.multimesh.visible_instance_count = 0
@@ -325,6 +374,16 @@ func reset() -> void:
 	_n_corpse = 0
 	_kind_live.fill(0)
 	_cell.fill(0)
+	_uid.fill(0)
+	_uid_next = 1
+	_slot_of_uid.clear()
+	_pending.clear()
+	_cq.clear()
+	_cq_head = 0
+	_cq_fade = 0
+	_wtick = 0
+	for b in _wheel:
+		b.clear()
 	_v_origin.clear()
 	_v_axis.clear()
 	_v_kind.clear()
@@ -352,6 +411,9 @@ func _spawn(x: float, y: float, r: float, type: int, kind: int, axis: float,
 	_pkind[i] = kind
 	_pax[i] = axis
 	_pvid[i] = vid
+	_uid[i] = _uid_next
+	_uid_next += 1
+	_slot_of_uid[_uid[i]] = i
 	_due[i] = _now + cool
 	_die[i] = _now + CORPSE_LIFE if type == 1 else 0.0
 	_fade[i] = -1
@@ -359,8 +421,10 @@ func _spawn(x: float, y: float, r: float, type: int, kind: int, axis: float,
 		_n_live += 1
 		_kind_live[kind] += 1
 		_cell_add(x, y)
+		_schedule(i, _due[i])
 	else:
 		_n_corpse += 1
+		_cq.append(_uid[i])
 	_write_slot(i)
 	_dirty = true
 	return i
@@ -375,6 +439,7 @@ func _copy_slot(dst: int, src: int) -> void:
 	_pax[dst] = _pax[src]
 	_ptype[dst] = _ptype[src]
 	_pvid[dst] = _pvid[src]
+	_uid[dst] = _uid[src]
 	_due[dst] = _due[src]
 	_die[dst] = _die[src]
 	_fade[dst] = _fade[src]
@@ -383,6 +448,7 @@ func _copy_slot(dst: int, src: int) -> void:
 func _kill(i: int) -> void:
 	if i < 0 or i >= _n:
 		return
+	var uid: int = _uid[i]
 	if _ptype[i] == 0:
 		_n_live -= 1
 		_kind_live[_pkind[i]] -= 1
@@ -392,11 +458,13 @@ func _kill(i: int) -> void:
 	var last := _n - 1
 	if i != last:
 		_copy_slot(i, last)
+		_slot_of_uid[_uid[i]] = i
 		# 池里数据搬过来了，但 GPU 那一格还是「被删掉那颗」的旧变换 ——
 		# 不重写就会出现「尸体已经没了、画面还留着」的鬼影（拾取时尤其明显）
 		_write_slot(i)
 	_n = last
 	_write_slot(last)
+	_slot_of_uid.erase(uid)
 	_dirty = true
 
 
@@ -415,9 +483,11 @@ func _to_corpse(i: int) -> void:
 	_n_live -= 1
 	_kind_live[_pkind[i]] -= 1
 	_n_corpse += 1
+	_cq.append(_uid[i])
 	_cell_remove(_px[i], _py[i])
 	_write_slot(i)
 	_dirty = true
+	_force_upload = true
 
 
 # 「死得不留疤」：不换位、不改计数口径以外的东西，打成「立即到期的尸体」
@@ -431,18 +501,20 @@ func _die_no_corpse(i: int) -> void:
 	_n_live -= 1
 	_kind_live[_pkind[i]] -= 1
 	_n_corpse += 1
+	_cq.append(_uid[i])
 	_cell_remove(_px[i], _py[i])
 	_write_slot(i)
 	_dirty = true
+	_force_upload = true
 
 
-# 尸体超过上限就丢一颗（从查询游标往后找，避免每次都从 0 开始）
+# 尸体超过上限就丢一颗：FIFO 头部就是最老的（寿命固定，入队顺序 == 到期顺序）
 func _drop_oldest_corpse() -> bool:
-	var visited := 0
-	while visited < _n:
-		var i := (_qc + visited) % _n
-		visited += 1
-		if _ptype[i] == 1:
+	while _cq_head < _cq.size():
+		var uid: int = _cq[_cq_head]
+		_cq_head += 1
+		var i: int = _slot_of_uid.get(uid, -1)
+		if i >= 0 and _ptype[i] == 1:
 			_kill(i)
 			return true
 	return false
@@ -500,57 +572,112 @@ func tick(dt: float) -> void:
 	_tick_blocks(dt)
 	_tick_fuses(dt)
 	var t0 := Time.get_ticks_usec() if prof_enabled else 0
-	_sweep()
+	_sim_step()
 	if prof_enabled:
 		prof_sweep_us += Time.get_ticks_usec() - t0
-	if _dirty:
+	_up_phase = (_up_phase + 1) % 2
+	if _dirty and (_up_phase == 0 or _force_upload):
 		var t1 := Time.get_ticks_usec() if prof_enabled else 0
 		_mmi.multimesh.buffer = _buf
-		# 只渲染 0.._n-1 这些真的在用的槽：池按 8192 步扩容，capacity 常远大于实际粒子数，
-		# 让渲染器去处理几万个 scale=0 的实例是白给的开销。
 		_mmi.multimesh.visible_instance_count = _n
 		_dirty = false
+		_force_upload = false
 		if prof_enabled:
 			prof_upload_us += Time.get_ticks_usec() - t1
 
 
-# 每帧只处理「预算内的槽」：不管池里有多少颗，单帧开销都有上限。
-# 两道闸门：数量闸（最多扫 budget 个槽）+ 时间闸（最多花 VIRUS_SWEEP_MS 毫秒）。
-# 时间闸是最后一道保险：粒子数爆到几万时，光按数量分预算仍会顶到 5~7ms/帧，
-# 再加渲染就是用户能感觉到的掉帧；到点直接停，剩下的下一帧接着扫（游标不会丢）。
-func _sweep() -> void:
-	if _n <= 0:
-		_cur = 0
-		return
-	var budget := clampi(_n / 8, WORK_BUDGET, WORK_BUDGET * 6)
-	var spawns := SPAWN_BUDGET
-	var visited := 0
+# 调度核心：只处理「到期」的粒子。
+# 成本 = 当帧到期量（繁殖 / 尸体到期），与池子总大小无关；
+# 时间闸 VIRUS_SWEEP_MS 保留，超时的进 _pending 下帧补，不会丢也不会重复。
+func _sim_step() -> void:
 	var deadline := Time.get_ticks_usec() + int(SWEEP_MS * 1000.0)
-	while visited < budget and _n > 0:
-		if (visited & 15) == 0 and Time.get_ticks_usec() > deadline:
+	var spawns := SPAWN_BUDGET
+	if not _pending.is_empty():
+		var work := _pending
+		_pending = []
+		for uid in work:
+			if spawns <= 0 or Time.get_ticks_usec() > deadline:
+				_pending.append(uid)
+				continue
+			spawns -= _run_due(uid)
+	var target := int(_now / WHEEL_DT)
+	while _wtick + 1 < target and spawns > 0:
+		if Time.get_ticks_usec() > deadline:
 			break
-		if _cur >= _n:
-			_cur = 0
-		var i := _cur
-		_cur += 1
-		visited += 1
-		prof_scan_n += 1
-		if _ptype[i] == 0:
-			if _due[i] <= _now and spawns > 0:
-				if prof_enabled:
-					var tr := Time.get_ticks_usec()
-					spawns -= _replicate(i)
-					prof_rep_us += Time.get_ticks_usec() - tr
-					prof_rep_n += 1
-				else:
-					spawns -= _replicate(i)
-		else:
-			if _die[i] <= _now:
-				_kill(i)
-				if _cur > _n:
-					_cur = 0
-			else:
-				_fade_corpse(i)
+		_wtick += 1
+		var b := _wtick % WHEEL_N
+		var bucket: Array = _wheel[b]
+		for uid in bucket:
+			if spawns <= 0 or Time.get_ticks_usec() > deadline:
+				_pending.append(uid)
+				continue
+			spawns -= _run_due(uid)
+		bucket.clear()
+	# 尸体到期：FIFO，最老的在最前面，遇到没到期的就停
+	while _cq_head < _cq.size():
+		var uid: int = _cq[_cq_head]
+		var i: int = _slot_of_uid.get(uid, -1)
+		if i < 0:
+			_cq_head += 1
+			continue
+		if _die[i] > _now:
+			break
+		_kill(i)
+		_cq_head += 1
+	_fade_some(256)
+	if _cq_head > 4096 and _cq_head * 2 > _cq.size():
+		_cq = _cq.slice(_cq_head)
+		_cq_fade = maxi(0, _cq_fade - _cq_head)
+		_cq_head = 0
+
+
+# 把一颗粒子的下次繁殖时刻排进时间轮；只接受活粒子
+func _schedule(i: int, due: float) -> void:
+	if i < 0 or i >= _n or _ptype[i] != 0:
+		return
+	var k := int(due / WHEEL_DT)
+	if k <= _wtick:
+		k = _wtick + 1     # 已经扫过的桶不回头，最晚下一个桶就轮到
+	_wheel[k % WHEEL_N].append(_uid[i])
+
+
+# 处理一颗到期的活粒子；返回它实际提交了几个新粒子（0/1）
+func _run_due(uid: int) -> int:
+	var i: int = _slot_of_uid.get(uid, -1)
+	if i < 0 or _ptype[i] != 0:
+		return 0
+	if _due[i] > _now + 0.0001:
+		# 桶是按量化时间扫的，可能略早于这颗粒子的到期时刻：
+		# 必须重新排回去，否则它就永远不再复制（表现为「病毒停住 / 像消失了一样」）
+		_schedule(i, _due[i])
+		return 0
+	prof_scan_n += 1
+	var r := 0
+	if prof_enabled:
+		var tr := Time.get_ticks_usec()
+		r = _replicate(i)
+		prof_rep_us += Time.get_ticks_usec() - tr
+		prof_rep_n += 1
+	else:
+		r = _replicate(i)
+	_schedule(i, _due[i])
+	return r
+
+
+# 尸体淡化：每帧最多 256 个，沿 FIFO 轮转（尸体数量远小于活粒子，够用）
+func _fade_some(limit: int) -> void:
+	if _cq_fade < _cq_head:
+		_cq_fade = _cq_head
+	var end_i := mini(_cq_fade + limit, _cq.size())
+	while _cq_fade < end_i:
+		var uid: int = _cq[_cq_fade]
+		_cq_fade += 1
+		var i: int = _slot_of_uid.get(uid, -1)
+		if i < 0 or _ptype[i] != 1:
+			continue
+		_fade_corpse(i)
+	if _cq_fade >= _cq.size():
+		_cq_fade = _cq_head
 
 
 # 尸体淡化只在「档位变了」才重写 12 个浮点，省掉整池每帧重写
@@ -571,18 +698,23 @@ func _replicate(i: int) -> int:
 	# 跳跃链 = 单点传播：往前方扇形里随机落一个点，隔着阻隔带也照样落
 	if kind == KIND_CHAIN:
 		return _chain_spread(i, axis)
-	var best := _pick_dir(i, kind, axis, cap, PI)
+	_pick_dir(i, kind, axis, cap, PI)
 	# 塞满和撞墙是两种失败：塞满的地方再等也长不出来，直接长退避，
 	# 否则每 0.3 秒重试一次，几万颗时会白白烧掉大量帧时间
-	if not best[3]:
-		_due[i] = _now + (_saturate_cool() if best[5] == 1 else _retry_cool())
+	if not _bfound:
+		_due[i] = _now + (_saturate_cool() if _bsat else _retry_cool())
 		return 0
-	return _do_spawn(i, best[1], best[2], kind, cap, best[4])
+	return _do_spawn(i, _bdx, _bdy, kind, cap, _bfar)
 
 # 在 max_diff 夹角范围内，挑「权重 × 剩余容量」最大的方向
 # 返回 [score, dx, dy, found]
-func _pick_dir(i: int, kind: int, axis: float, cap: int, max_diff: float) -> Array:
+func _pick_dir(i: int, kind: int, axis: float, cap: int, max_diff: float) -> void:
+	_bfound = false
+	_bfar = false
+	_bsat = false
 	var saw_cap := false
+	var x0: float = _px[i]
+	var y0: float = _py[i]
 	for pass_i in range(2):
 		# 第二遍把探路距离放到 ESCAPE_PROBE：本地格子长满时，还能往远处空位甩一颗，
 		# 否则「小股病毒坐在一个塞满的格子里」会一直不长，看起来像卡住
@@ -591,36 +723,47 @@ func _pick_dir(i: int, kind: int, axis: float, cap: int, max_diff: float) -> Arr
 		var bx := 0.0
 		var by := 0.0
 		var found := false
+		var is_blob := kind == KIND_BLOB
+		var has_blk := not _blk.is_empty()
+		var has_organ := _omw > 0
 		for k in range(8):
 			var ang := float(k) * PI * 0.25
-			if _ang_diff(ang, axis) > max_diff:
+			# BLOB 各向同性：不算夹角、不查方向权重，省掉每颗 8 次取模与三角函数
+			if not is_blob and _ang_diff(ang, axis) > max_diff:
 				continue
-			var dx := cos(ang)
-			var dy := sin(ang)
-			var tx := _px[i] + dx * pd
-			var ty := _py[i] + dy * pd
+			var dx: float = DIRV[k].x
+			var dy: float = DIRV[k].y
+			var tx := x0 + dx * pd
+			var ty := y0 + dy * pd
 			if tx < ARENA_PAD or tx > ARENA_W - ARENA_PAD or ty < ARENA_PAD or ty > ARENA_H - ARENA_PAD:
 				continue
 			# 器官肉壁：这个方向长不过去。
 			# 探路距离 30 比最薄隔膜（46）还短，所以「终点一格是否实心」就等价于「这段没穿墙」，
 			# 单点采样足够；只有第二遍 60 的远投才需要沿线段多点采样。
-			if organ != null:
+			if has_organ:
 				if pd <= 32.0:
-					if organ.solid_xy(tx, ty):
+					# 内联 organ.solid_xy：同样的栅格判定，省掉一次函数调用
+					var gi := int(tx / OPIX)
+					var gj := int(ty / OPIX)
+					if gi < 0 or gj < 0 or gi >= _omw or gj >= _omh or _osolid[gj * _omw + gi] == 1:
 						continue
-				elif not organ.line_free(_px[i], _py[i], tx, ty):
+				elif not organ.line_free(x0, y0, tx, ty):
 					continue
 			# 生效的阻隔带把外面封死：这个方向不可选，
 			# 于是生长会自动沿带子走向两端，形成绕射
-			if _block_cross(_px[i], _py[i], tx, ty) == 1:
+			if has_blk and _block_cross(x0, y0, tx, ty) == 1:
 				continue
-			var c := _cell_count(tx, ty)
+			# 内联 _cell_idx + _cell_count
+			var ccx := int(clampf(tx / CELL, 0.0, GRID_W - 1.0))
+			var ccy := int(clampf(ty / CELL, 0.0, GRID_H - 1.0))
+			var c: int = _cell[ccy * GRID_W + ccx]
 			if c >= cap:
 				saw_cap = true
 				continue
-			var sc := _dir_weight(kind, axis, ang) * float(cap - c)
+			var w := 1.0 if is_blob else _dir_weight(kind, axis, ang)
+			var sc := w * float(cap - c)
 			if pass_i == 1:
-				sc = _dir_weight(kind, axis, ang) * 0.9
+				sc = w * 0.9
 			if sc > best:
 				best = sc
 				bx = dx
@@ -630,8 +773,12 @@ func _pick_dir(i: int, kind: int, axis: float, cap: int, max_diff: float) -> Arr
 				bx = dx
 				by = dy
 		if found:
-			return [best, bx, by, true, pass_i == 1, 0]
-	return [0.0, 0.0, 0.0, false, false, 1 if saw_cap else 0]
+			_bdx = bx
+			_bdy = by
+			_bfound = true
+			_bfar = pass_i == 1
+			return
+	_bsat = saw_cap
 
 func _chain_spread(i: int, axis: float) -> int:
 	# 往主轴前方 ±CHAIN_SPREAD_DEG 的扇形里随机落一个点。
@@ -963,28 +1110,26 @@ func fuse_count() -> int:
 func minimap_snapshot(max_pts: int) -> Dictionary:
 	var live := PackedVector2Array()
 	var corpse := PackedVector2Array()
-	var left := 0
-	var right := 0
 	var mid := ARENA_W * 0.5
-	var stride_live := maxi(1, int(ceil(float(maxi(1, _n_live)) / float(max_pts))))
-	var stride_corpse := maxi(1, int(ceil(float(maxi(1, _n_corpse)) / float(float(max_pts) * 0.6))))
-	var cnt := 0
-	var ccnt := 0
-	for i in range(_n):
-		if _ptype[i] == 1 and _die[i] <= _now:
-			continue
+	# 只按步长抽样，不做全池扫描：全池扫描在 3 万颗时一次要数毫秒，
+	# 小地图 10Hz 刷新就会把这份成本变成周期性的掉帧。
+	var step := maxi(1, int(ceil(float(maxi(1, _n)) / float(max_pts))))
+	var sampled := 0
+	var left := 0
+	var i := 0
+	while i < _n:
 		if _ptype[i] == 0:
+			sampled += 1
 			if _px[i] < mid:
 				left += 1
-			else:
-				right += 1
-			cnt += 1
-			if cnt % stride_live == 0:
-				live.append(Vector2(_px[i], _py[i]))
-		else:
-			ccnt += 1
-			if ccnt % stride_corpse == 0:
-				corpse.append(Vector2(_px[i], _py[i]))
+			live.append(Vector2(_px[i], _py[i]))
+		elif _die[i] > _now:
+			corpse.append(Vector2(_px[i], _py[i]))
+		i += step
+	# 左右叶数量按抽样比例放大回全池，显示口径与原来一致
+	var ratio := float(_n_live) / float(maxi(1, sampled))
+	left = int(left * ratio)
+	var right := maxi(0, _n_live - left)
 	var blocks: Array = []
 	for b in _blk:
 		blocks.append([b["a"], b["b"], int(b["state"])])
@@ -1252,3 +1397,37 @@ func _write_slot(i: int) -> void:
 	_buf[o + 9] = col.g
 	_buf[o + 10] = col.b
 	_buf[o + 11] = col.a
+
+
+# ============================================================ 自检
+# 全池扫一遍，只在压测时调用（不参与正式帧）。
+#   overdue  = 到期超过 6 秒还没被调度的活粒子数（>0 说明时间轮漏了）
+#   live/corpse 与计数器必须一致；map 必须等于池内槽数（uid 映射没丢）
+func debug_sched() -> Dictionary:
+	var seen := {}
+	var in_wheel := 0
+	for b in _wheel:
+		in_wheel += b.size()
+		for uid in b:
+			seen[uid] = true
+	for uid in _pending:
+		seen[uid] = true
+	var missing := 0
+	for i in range(_n):
+		if _ptype[i] == 0 and not seen.has(_uid[i]):
+			missing += 1
+	return {"wtick": _wtick, "target": int(_now / WHEEL_DT), "pending": _pending.size(), "wheel": in_wheel, "missing": missing, "now": _now}
+
+func audit() -> Dictionary:
+	var live := 0
+	var corpse := 0
+	var overdue := 0
+	for i in range(_n):
+		if _ptype[i] == 0:
+			live += 1
+			if _due[i] < _now - 6.0:
+				overdue += 1
+		else:
+			corpse += 1
+	return {"live": live, "corpse": corpse, "overdue": overdue, "n": _n,
+		"map": _slot_of_uid.size(), "live_counter": _n_live, "corpse_counter": _n_corpse}

@@ -29,7 +29,7 @@ func setup(h) -> void:
 
 func wants_run() -> bool:
 	var a := OS.get_cmdline_user_args()
-	return a.has("--shot") or a.has("--aim") or a.has("--overview") or a.has("--stress") or a.has("--walk") or a.has("--econ") or a.has("--wall")
+	return a.has("--shot") or a.has("--aim") or a.has("--overview") or a.has("--stress") or a.has("--walk") or a.has("--econ") or a.has("--wall") or a.has("--perf")
 
 
 func run() -> void:
@@ -44,6 +44,8 @@ func run() -> void:
 		await _overview()
 	elif a.has("--stress"):
 		_stress()
+	elif a.has("--perf"):
+		await _perf()
 	elif a.has("--walk"):
 		_walk()
 	else:
@@ -219,6 +221,52 @@ func _econ() -> void:
 	get_tree().quit()
 
 
+# ============================================================ 实跑帧率
+# 和 --stress 的分工：stress 只量「模拟一帧要几毫秒」；
+# perf 走正常主循环 + 真实渲染，自动转圈开火，量的是玩家真正看到的帧率。
+var _perf_on := false
+var _perf_t := 0.0
+var _perf_all := 0.0
+var _perf_frames := 0
+var _perf_wf := 0
+var _perf_worst := 0.0
+
+
+func _perf() -> void:
+	await get_tree().create_timer(0.60).timeout
+	if host._spawn_pts.size() > 0:
+		host.player_unit.position = host._spawn_pts[0]
+	# 额外播种：直接把战场推进高压区，不必等一分钟自然扩散
+	for p in host._spawn_pts:
+		for k in range(3):
+			host.pop.seed_blob(p, 50.0, 260)
+	_perf_on = true
+	await get_tree().create_timer(40.0).timeout
+	_perf_on = false
+	print("[PERF] RESULT avg=%.1ffps worst=%.1fms live=%d" % [
+		float(_perf_frames) / maxf(_perf_all, 0.001), _perf_worst * 1000.0, host.pop.live_count()])
+	get_tree().quit()
+
+
+func _process(delta: float) -> void:
+	if not _perf_on:
+		return
+	_perf_t += delta
+	_perf_all += delta
+	_perf_frames += 1
+	_perf_wf += 1
+	_perf_worst = maxf(_perf_worst, delta)
+	var aim := Vector2.RIGHT.rotated(floor(_perf_all / 0.6) * (TAU / 8.0))
+	host.jet.fire(host.player_unit.position, aim)
+	if _perf_t >= 2.0:
+		print("[PERF] t=%.0fs fps=%.1f worst=%.1fms live=%d corpse=%d" % [
+			_perf_all, float(_perf_wf) / _perf_t, _perf_worst * 1000.0,
+			host.pop.live_count(), host.pop.corpse_count()])
+		_perf_t = 0.0
+		_perf_wf = 0
+		_perf_worst = 0.0
+
+
 # ============================================================ 压测
 func _stress() -> void:
 	var frames := 3600
@@ -244,6 +292,10 @@ func _stress() -> void:
 			host.pop.prof_scan_n = 0
 			sum = 0.0
 			worst = 0.0
+		if k % 600 == 599:
+			# 每 10 秒全池审计一次：证明「调度没有把病毒弄丢 / 弄停」
+			print("[AUDIT] %s" % [host.pop.audit()])
+			print("[SCHED] %s" % [host.pop.debug_sched()])
 	get_tree().quit()
 
 
