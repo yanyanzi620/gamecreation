@@ -68,3 +68,9 @@ push-to-github.ps1
 一键推送.bat
 main_shot_*.png
 main_shot_*.png.import
+
+# 地图诊断产物（本地临时，不进版本库）
+probe_mask.png
+probe_mask.png.import
+probe_big.png
+probe_big.png.import

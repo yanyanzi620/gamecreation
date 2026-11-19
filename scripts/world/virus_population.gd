@@ -123,6 +123,9 @@ var _dirty := true
 var _blk: Array = []
 var _fuse: Array = []
 
+# 器官地图（OrganMap）。为空时退化成「空旷场地」，老的 demo 场景照常跑
+var organ = null
+
 func _ready() -> void:
 	_rng.seed = 20261119
 	_init_pool()
@@ -232,6 +235,11 @@ func live_by_kind(kind: int) -> int:
 func arena_size() -> Vector2:
 	return Vector2(ARENA_W, ARENA_H)
 
+
+# 接入器官地图：之后病毒的生长、越界、出生都会被肉壁限制
+func bind_organ(m) -> void:
+	organ = m
+
 # ============================================================ 池操作
 
 # 整场清空（重开用）：池、格子、尸体、阻隔带、引信全部归零
@@ -266,6 +274,8 @@ func _spawn(x: float, y: float, r: float, type: int, kind: int, axis: float,
 	if type == 0 and _n_live >= MAX_LIVE:
 		return -1
 	if type == 1 and _n_corpse >= MAX_CORPSE:
+		return -1
+	if type == 0 and organ != null and organ.solid_point(Vector2(x, y)):
 		return -1
 	var i: int = _free.pop_back()
 	_alive[i] = 1
@@ -421,6 +431,9 @@ func _pick_dir(i: int, kind: int, axis: float, cap: int, max_diff: float) -> Arr
 		var ty := _py[i] + dy * PROBE_DIST
 		if tx < ARENA_PAD or tx > ARENA_W - ARENA_PAD or ty < ARENA_PAD or ty > ARENA_H - ARENA_PAD:
 			continue
+		# 器官肉壁：这个方向长不过去
+		if organ != null and organ.blocked(Vector2(_px[i], _py[i]), Vector2(tx, ty)):
+			continue
 		# 生效的阻隔带把外面封死：这个方向不可选，
 		# 于是生长会自动沿带子走向两端，形成绕射
 		if _block_cross(_px[i], _py[i], tx, ty) == 1:
@@ -450,6 +463,18 @@ func _chain_spread(i: int, axis: float) -> void:
 	if nx < ARENA_PAD or nx > ARENA_W - ARENA_PAD or ny < ARENA_PAD or ny > ARENA_H - ARENA_PAD:
 		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
 		return
+	# 跳跃链是「空中落点」：能跨阻隔带、也能跨肉壁，
+	# 但落点必须被拉回流明里，否则会嵌进组织内部
+	if organ != null and organ.solid_point(Vector2(nx, ny)):
+		var free_at: Vector2 = organ.nearest_free(Vector2(nx, ny), 90.0)
+		if free_at.x < 0.0:
+			_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
+			return
+		nx = free_at.x
+		ny = free_at.y
+	if nx < ARENA_PAD or nx > ARENA_W - ARENA_PAD or ny < ARENA_PAD or ny > ARENA_H - ARENA_PAD:
+		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
+		return
 	if _cell_count(nx, ny) >= CAP_CHAIN:
 		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
 		return
@@ -473,6 +498,11 @@ func _do_spawn(i: int, bx: float, by: float, kind: int, cap: int) -> void:
 	if nx < ARENA_PAD or nx > ARENA_W - ARENA_PAD or ny < ARENA_PAD or ny > ARENA_H - ARENA_PAD:
 		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
 		return
+	if organ != null:
+		var q := Vector2(nx, ny)
+		if organ.solid_point(q) or organ.blocked(Vector2(_px[i], _py[i]), q):
+			_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
+			return
 	if _cell_count(nx, ny) >= cap:
 		_pcool[i] = _rng.randf_range(COOL_MIN, COOL_MAX)
 		return
@@ -676,6 +706,8 @@ func place_block(origin: Vector2, dir: Vector2) -> bool:
 
 # 玩家移动用：只有「已生效」的阻隔带才拦人，闪烁期两者都能穿过去
 func path_blocked(a: Vector2, b: Vector2) -> bool:
+	if organ != null and organ.blocked_body(a, b, Balance.PLAYER_R * 0.72):
+		return true
 	return _block_cross(a.x, a.y, b.x, b.y) == 1
 
 

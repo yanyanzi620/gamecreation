@@ -3,35 +3,43 @@ extends Node2D
 # 主场景 —— 体内免疫战斗（正式玩法，替换 M1-T1 灰盒）
 #
 # 组成
-#   Virus  病毒种群：三形态粒子（圆盘 / 带状 / 跳跃链）
-#   Jet    射流：左键，扇形清除
-#   Aura   净化场（贴身自动消融）+ 养分自动拾取
-#   玩家   中枢意识接管的一个免疫单元（本版先只做一个）
+#   OrganMap 器官地图：流明（可通行）由形状并集生成，边界即肉壁
+#   OrganView 把地图画出来（纯代码占位，美术接口留好）
+#   Virus    病毒种群：三形态粒子（圆盘 / 带状 / 跳跃链）
+#   Jet      射流：左键，扇形清除
+#   Aura     净化场（贴身自动消融）+ 养分自动拾取
+#   玩家     中枢意识接管的一个免疫单元（本版先只做一个）
 #
 # 操作
-#   WASD  移动（阻隔带会挡人，撞上沿带滑动）
+#   WASD  移动（肉壁和阻隔带都挡人，撞上沿墙滑动）
 #   左键  射流
-#   右键  阻隔带（消耗养分，先闪烁后生效，拦病毒也拦人）
+#   右键  阻隔带（消耗养分，先闪烁后生效）
 #   空格  引信（小圈杀盘/带/链，大圈只吸跳跃链）
-#   R     重新播种
+#   R     换一张肺（新种子）+ 重新播种
 #
-# 所有平衡数值来自 scripts/core/balance.gd，本文件不写死任何数值。
+# 地图种子可以用命令行固定：-- --seed=12345，方便复现同一张图。
+# 所有平衡数值来自 scripts/core/balance.gd。
 # ============================================================
 
 const STEP := 1.0 / 60.0
-const START_POS := Vector2(900.0, 450.0)
 const START_NUTRIENT := 60
+const DEFAULT_SEED := 20261119
 
 const KIND_BLOB := 0
 const KIND_BAND := 1
 const KIND_CHAIN := 2
 
 var pop
-var _bg: Node2D
+var view: Node2D
 var jet
 var aura
 
-var player := START_POS
+var player := Vector2(800.0, 500.0)
+var map_seed := DEFAULT_SEED
+
+var _map = null
+var _rng := RandomNumberGenerator.new()
+var _spawn_pts: Array[Vector2] = []
 
 var _acc := 0.0
 var _blk_cd := 0.0
@@ -41,6 +49,7 @@ var _shot := false
 
 var _hud: Label
 var _hud2: Label
+var _hud3: Label
 var _hint: Label
 var _bar: ColorRect
 
@@ -51,21 +60,29 @@ func _ready() -> void:
 	OS.low_processor_usage_mode = false
 	Engine.max_fps = 0
 	_shot = OS.get_cmdline_user_args().has("--shot")
+	map_seed = _parse_seed()
 
 	_build()
 	_build_hud()
-	_reseed()
+	_reseed(false)
 
 	if _shot:
 		_shot_sequence()
 
 
+func _parse_seed() -> int:
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--seed="):
+			return int(a.substr(7))
+	return DEFAULT_SEED
+
+
 func _build() -> void:
-	# 背景单独一层，压到病毒 MultiMesh(z=-1) 下面
-	_bg = load("res://scripts/world/backdrop.gd").new()
-	_bg.name = "Backdrop"
-	_bg.z_index = -2
-	add_child(_bg)
+	# 器官视图压在病毒(z=-1)下面
+	view = load("res://scripts/world/organ_view.gd").new()
+	view.name = "OrganView"
+	view.z_index = -2
+	add_child(view)
 
 	pop = load("res://scripts/world/virus_population.gd").new()
 	pop.name = "Virus"
@@ -80,8 +97,6 @@ func _build() -> void:
 	aura.name = "Aura"
 	add_child(aura)
 	aura.bind(pop)
-
-	_bg.setup(pop.arena_size())
 
 
 func _build_hud() -> void:
@@ -107,27 +122,92 @@ func _build_hud() -> void:
 	_hud2.add_theme_color_override("font_color", Color(0.95, 0.82, 0.45))
 	layer.add_child(_hud2)
 
+	_hud3 = Label.new()
+	_hud3.position = Vector2(18.0, 134.0)
+	_hud3.add_theme_font_size_override("font_size", 13)
+	_hud3.add_theme_color_override("font_color", Color(0.62, 0.74, 0.86))
+	layer.add_child(_hud3)
+
 	_hint = Label.new()
-	_hint.position = Vector2(18.0, 136.0)
+	_hint.position = Vector2(18.0, 156.0)
 	_hint.add_theme_font_size_override("font_size", 13)
 	_hint.add_theme_color_override("font_color", Color(0.60, 0.68, 0.64))
-	_hint.text = "WASD 移动 · 左键 = 射流 · 右键 = 阻隔带(30) · 空格 = 引信(40) · R = 重开"
+	_hint.text = "WASD 移动 · 左键 = 射流 · 右键 = 阻隔带(30) · 空格 = 引信(40) · R = 换一张肺"
 	layer.add_child(_hint)
 
 
-func _reseed() -> void:
+# ============================================================ 地图
+
+func _gen_map() -> void:
+	var t0 := Time.get_ticks_usec()
+	var gen := LungGen.new()
+	_map = gen.build(map_seed, pop.arena_size())
+	pop.bind_organ(_map)
+	view.set_map(_map)
+	# 可达率用「真实碰撞口径」：玩家碰撞按 0.72R 算，这里阈值同步
+	# 阈值与真实碰撞一致：blocked_body 用的是 0.72R 的偏移线
+	var rep: Dictionary = _map.walk_report(Balance.PLAYER_R * 0.72)
+	print("[MAP] seed=%d shapes=%d loops=%d(open %d) segs=%d build=%dms free=%.1f%% walk=%.1f%% reach=%.1f%% comps=%d (total %dms)" % [
+		map_seed, _map.shape_count, int(rep["loops"]), int(rep["open_loops"]), int(rep["segments"]), _map.build_ms,
+		float(rep["free_ratio"]) * 100.0, float(rep["walk_area"]) * 100.0,
+		float(rep["reach_ratio"]) * 100.0, int(rep["components"]),
+		int(Time.get_ticks_usec() - t0) / 1000
+	])
+
+
+func _reseed(roll_map: bool) -> void:
+	if _map == null or roll_map:
+		if roll_map:
+			_rng.seed = int(Time.get_ticks_msec())
+			map_seed = _rng.randi_range(1, 999999)
+		_gen_map()
+
 	pop.reset()
 	aura.nutrient = START_NUTRIENT
 	aura.picked = 0
-	player = START_POS
 	_acc = 0.0
 	_blk_cd = 0.0
 	_fuse_cd = 0.0
 
-	# 肺 L1 占位：一团圆盘、一条带状、一簇跳跃链
-	pop.spawn_virus(KIND_BLOB, Vector2(1120.0, 300.0), 105.0, 0.0, 220, 0.0)
-	pop.spawn_virus(KIND_BAND, Vector2(330.0, 210.0), 200.0, 32.0, 85, 0.08)
-	pop.spawn_virus(KIND_CHAIN, Vector2(230.0, 770.0), 26.0, 0.0, 10, -0.35)
+	_rng.seed = map_seed
+	player = _pick_near_center()
+	_spawn_wave()
+
+
+func _pick_near_center() -> Vector2:
+	var best: Vector2 = _map.size * 0.5
+	var best_d := 1.0e9
+	for i in range(30):
+		var p: Vector2 = _map.random_free_point(_rng, Balance.PLAYER_R + 6.0)
+		var d: float = p.distance_to(_map.size * 0.5)
+		if d < best_d:
+			best_d = d
+			best = p
+	return best
+
+
+# 三种形态各找一块开阔流明播种，彼此至少隔开 380 像素
+func _spawn_wave() -> void:
+	_spawn_pts.clear()
+	for attempt in range(80):
+		if _spawn_pts.size() >= 3:
+			break
+		var cand: Vector2 = _map.random_free_point(_rng, 52.0)
+		var ok := true
+		for p in _spawn_pts:
+			if p.distance_to(cand) < 380.0:
+				ok = false
+				break
+		if ok:
+			_spawn_pts.append(cand)
+
+	while _spawn_pts.size() < 3:
+		var fallback: Vector2 = _map.size * 0.5 + Vector2(float(_spawn_pts.size()) * 120.0, 0.0)
+		_spawn_pts.append(fallback)
+
+	pop.spawn_virus(KIND_BLOB, _spawn_pts[0], 88.0, 0.0, 200, _rng.randf() * TAU)
+	pop.spawn_virus(KIND_BAND, _spawn_pts[1], 165.0, 26.0, 70, _rng.randf() * TAU)
+	pop.spawn_virus(KIND_CHAIN, _spawn_pts[2], 22.0, 0.0, 9, _rng.randf() * TAU)
 
 
 # ============================================================ 输入
@@ -140,7 +220,7 @@ func _unhandled_input(e: InputEvent) -> void:
 		if k.keycode == KEY_SPACE:
 			_place_fuse(get_global_mouse_position())
 		elif k.keycode == KEY_R:
-			_reseed()
+			_reseed(true)
 		return
 
 	if not (e is InputEventMouseButton):
@@ -184,7 +264,13 @@ func _place_fuse(target: Vector2) -> bool:
 	var d := target - player
 	if d.length() < 1.0:
 		d = Vector2.RIGHT
-	if not pop.add_fuse(player + d.normalized() * Balance.FUSE_OFFSET):
+	var spot: Vector2 = player + d.normalized() * Balance.FUSE_OFFSET
+	# 引信不能丢在肉壁里，往流明吸一下
+	if _map.solid_point(spot):
+		spot = _map.nearest_free(spot, 80.0)
+		if spot.x < 0.0:
+			return false
+	if not pop.add_fuse(spot):
 		return false
 	aura.nutrient -= Balance.FUSE_COST
 	_fuse_cd = Balance.FUSE_COOLDOWN
@@ -200,13 +286,21 @@ func _move_step(dir: Vector2, delta: float) -> void:
 	var np := player + step
 	if not pop.path_blocked(player, np):
 		player = np
+		_clamp_player()
 		return
-	# 撞上已生效的阻隔带：只走分量大的那一个轴，沿带子滑过去
+	# 撞墙 / 撞带：只走分量大的那一个轴，沿墙滑过去
 	if absf(step.x) >= absf(step.y):
 		if not pop.path_blocked(player, player + Vector2(step.x, 0.0)):
 			player += Vector2(step.x, 0.0)
 	elif not pop.path_blocked(player, player + Vector2(0.0, step.y)):
 		player += Vector2(0.0, step.y)
+	_clamp_player()
+
+
+func _clamp_player() -> void:
+	var m := Balance.PLAYER_R + 6.0
+	player.x = clampf(player.x, m, _map.size.x - m)
+	player.y = clampf(player.y, m, _map.size.y - m)
 
 
 # ============================================================ 主循环
@@ -260,29 +354,50 @@ func _update_hud() -> void:
 		aura.nutrient, aura.picked, jet.last_hit(), pop.block_count(),
 		pop.fuse_count(), _blk_cd, _fuse_cd
 	]
+	if _map != null:
+		_hud3.text = "肺 seed %d   流明 %.1f%%   墙段 %d   轮廓 %d" % [
+			map_seed, _map.free_ratio * 100.0, _map.seg_a.size(), _map.loops.size()
+		]
 
 
 # ============================================================ 画面
 
+func _aclamp() -> Vector2:
+	return player
+
+
 func _draw() -> void:
-	# 玩家（免疫单元）；背景与网格在 Backdrop 层
+	# 玩家（免疫单元）；地形在 OrganView 层
 	draw_circle(player, Balance.PLAYER_R * 1.6, Color(0.20, 0.45, 0.95, 0.16))
 	draw_circle(player, Balance.PLAYER_R, Color(0.34, 0.64, 1.0, 0.92))
 	draw_arc(player, Balance.PLAYER_R, 0.0, TAU, 32, Color(0.76, 0.89, 1.0), 2.0)
+	# 朝向短线：让人看得出「正前方」是哪儿（阻隔带和引信都按正前方放）
+	draw_line(player, player + Vector2(0.0, -Balance.PLAYER_R - 10.0), Color(0.80, 0.92, 1.0, 0.5), 2.0)
 
 
 # ============================================================ 自动验收（-- --shot）
 
 func _shot_sequence() -> void:
-	await get_tree().create_timer(1.20).timeout
-	_place_block(Vector2(1120.0, 300.0))
-	await get_tree().create_timer(1.80).timeout
-	_fire(Vector2(1120.0, 300.0))
+	await get_tree().create_timer(0.60).timeout
+	# 站到第一个病毒团旁边，保证射流够得到（否则 hit 永远是 0）
+	if _spawn_pts.size() >= 1:
+		var target: Vector2 = _spawn_pts[0]
+		var behind: Vector2 = _map.nearest_free(target + Vector2(-235.0, 60.0), 200.0)
+		if behind.x > 0.0:
+			player = behind
+	await get_tree().create_timer(0.60).timeout
+	if _spawn_pts.size() >= 1:
+		_place_block(_spawn_pts[0])
+	await get_tree().create_timer(1.60).timeout
+	if _spawn_pts.size() >= 1:
+		_fire(_spawn_pts[0])
 	await get_tree().create_timer(0.55).timeout
-	_fire(Vector2(1120.0, 300.0))
+	if _spawn_pts.size() >= 1:
+		_fire(_spawn_pts[0])
 	await get_tree().create_timer(0.85).timeout
 	_save("res://main_shot_a.png")
-	pop.add_fuse(Vector2(690.0, 690.0))
+	if _spawn_pts.size() >= 3:
+		pop.add_fuse(_spawn_pts[2])
 	await get_tree().create_timer(2.20).timeout
 	_save("res://main_shot_b.png")
 	get_tree().quit()
@@ -292,7 +407,7 @@ func _save(path: String) -> void:
 	var img := get_viewport().get_texture().get_image()
 	img.save_png(ProjectSettings.globalize_path(path))
 	print("[SHOT] ", path)
-	print("[STAT] live=%d corpse=%d nut=%d picked=%d hit=%d fuse=%d chain=%d" % [
-		pop.live_count(), pop.corpse_count(), aura.nutrient, aura.picked,
-		jet.last_hit(), pop.fuse_count(), pop.live_by_kind(KIND_CHAIN)
+	print("[STAT] seed=%d live=%d corpse=%d nut=%d picked=%d hit=%d fuse=%d chain=%d player=(%.0f,%.0f)" % [
+		map_seed, pop.live_count(), pop.corpse_count(), aura.nutrient, aura.picked,
+		jet.last_hit(), pop.fuse_count(), pop.live_by_kind(KIND_CHAIN), player.x, player.y
 	])
