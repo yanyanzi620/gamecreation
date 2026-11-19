@@ -53,7 +53,7 @@ func _ready() -> void:
 	# 主场景不能改（卡 §10.1），所以阻断带由本系统自举：自建一个私有子节点
 	# 并通过 §5.3 的 BlockProvider 契约接上；测试/未来 M5-T2 可用 attach_blocks 注入自己的实例
 	if block_system == null and _auto_blocks:
-		block_system = load("res://scripts/units/tools/block_system.gd").new()
+		block_system = load("res://scripts/legacy/block_system.gd").new()
 		block_system.name = "Blocks"
 		add_child(block_system)
 		attach_blocks(block_system)

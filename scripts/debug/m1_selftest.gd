@@ -16,8 +16,8 @@ var total := 0
 
 func _ready() -> void:
 	RNG.reset(12345)                     # 同 seed 连跑两次必须逐字节一致
-	spread = load("res://scripts/world/spread_system.gd").new()
-	block = load("res://scripts/units/tools/block_system.gd").new()
+	spread = load("res://scripts/legacy/spread_system.gd").new()
+	block = load("res://scripts/legacy/block_system.gd").new()
 	spread._ensure_cfg()
 	block._ensure_cfg()
 	spread.clear()                       # 去掉 greybox_demo 的演示带
