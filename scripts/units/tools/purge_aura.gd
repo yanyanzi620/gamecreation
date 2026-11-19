@@ -83,7 +83,9 @@ func _draw() -> void:
 	var a := 1.0 if _flash > 0.0 else 0.0
 	draw_circle(_center, PURGE_RADIUS, Color(0.30, 0.80, 0.95, 0.05 + 0.06 * a))
 	draw_arc(_center, PURGE_RADIUS, 0.0, TAU, 64, Color(0.42, 0.88, 1.0, 0.35 + 0.35 * a), 2.0)
-	draw_arc(_center, PICKUP_RADIUS, 0.0, TAU, 96, Color(1.0, 0.84, 0.42, 0.10), 1.0)
+	# 拾取范围：白色细环（养分是白色，别再用金色，否则和病毒撞色）
+	draw_arc(_center, PICKUP_RADIUS, 0.0, TAU, 96, Color(1.0, 1.0, 1.0, 0.10), 1.0)
 	for mote in _motes:
 		var p: Vector2 = mote
-		draw_circle(p, 3.2, Color(1.0, 0.86, 0.45, 0.95))
+		draw_circle(p, 3.2, Color(1.0, 1.0, 1.0, 0.95))
+		draw_circle(p, 6.0, Color(1.0, 1.0, 1.0, 0.12))

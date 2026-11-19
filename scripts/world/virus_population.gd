@@ -371,6 +371,9 @@ func _kill(i: int) -> void:
 	var last := _n - 1
 	if i != last:
 		_copy_slot(i, last)
+		# 池里数据搬过来了，但 GPU 那一格还是「被删掉那颗」的旧变换 ——
+		# 不重写就会出现「尸体已经没了、画面还留着」的鬼影（拾取时尤其明显）
+		_write_slot(i)
 	_n = last
 	_write_slot(last)
 	_dirty = true

@@ -1,0 +1,18 @@
+{
+  "_说明": "HUD 图标映射。改图标只要保持同名文件覆盖；要换文件名（或换成 png）就改这里，代码不用动。",
+  "_规格": "1:1 方形，透明底，主体占满 90%，边缘留 3~4px 空隙；建议 64/128/256 三档，游戏内按 22~36px 显示。",
+  "_配色": "养分=白 #FFFFFF · 圆盘=绿 #4DDC75 · 带状=琥珀 #F7BA42 · 跳跃链=品红 #E061CC · 尸体=灰 #A8B3BD · 手段/阻隔带=青 #62FAFF · 引信=橙 #F28C4D + 紫 #DB6BF2",
+  "icons": {
+    "nutrient": "nutrient.svg",
+    "virus": "virus.svg",
+    "blob": "virus_blob.svg",
+    "band": "virus_band.svg",
+    "chain": "virus_chain.svg",
+    "corpse": "corpse.svg",
+    "perf": "perf.svg",
+    "jet": "skill_jet.svg",
+    "block": "skill_block.svg",
+    "fuse": "skill_fuse.svg",
+    "lobe": "lobe.svg"
+  }
+}

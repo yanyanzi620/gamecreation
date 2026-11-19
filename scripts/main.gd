@@ -437,6 +437,8 @@ func _update_hud() -> void:
 		"nutrient": aura.nutrient, "picked": aura.picked, "hit": jet.last_hit(),
 		"blocks": pop.block_count(), "fuses": pop.fuse_count(),
 		"cd_block": _blk_cd, "cd_fuse": _fuse_cd,
+		"aim": _aim,
+		"fuse_ratio": 1.0 - clampf(_fuse_cd / Balance.FUSE_COOLDOWN, 0.0, 1.0),
 		"map_seed": map_seed,
 	}
 	if _map != null:
