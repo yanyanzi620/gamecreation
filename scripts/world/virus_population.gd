@@ -154,6 +154,11 @@ var _dirty := true
 var _blk: Array = []
 var _fuse: Array = []
 
+# 事件出口：给音频/演出层用。
+# 玩法层不播声音，只把「刚发生了什么」记下来，main 每帧取走（drain_events）。
+# 上限 64 条：就算帧率掉了也不会无限堆积，多的直接丢（音效丢几条没人听得出来）。
+var events: Array = []
+
 # 器官地图（OrganMap）。为空时退化成「空旷场地」，老的 demo 场景照常跑
 var organ = null
 
@@ -161,6 +166,19 @@ func _ready() -> void:
 	_rng.seed = 20261119
 	_init_pool()
 	_init_multimesh()
+
+
+# 事件出口：{ "k": 事件名, "p": 位置 }
+func push_event(kind: String, pos: Vector2 = Vector2.ZERO) -> void:
+	if events.size() < 64:
+		events.append({"k": kind, "p": pos})
+
+
+# main 每帧调一次：拿走上帧发生的事，然后清空
+func drain_events() -> Array:
+	var out := events
+	events = []
+	return out
 
 func _init_pool() -> void:
 	_cell.resize(GRID_W * GRID_H)
@@ -870,6 +888,8 @@ func add_fuse(center: Vector2) -> bool:
 	if _fuse.size() >= MAX_FUSE:
 		return false
 	_fuse.append({"c": center, "t": 0.0})
+	push_event("fuse_place", center)
+	push_event("fuse_pulse", center)
 	queue_redraw()
 	return true
 
@@ -1049,6 +1069,7 @@ func place_block(origin: Vector2, dir: Vector2, dist: float) -> bool:
 	# a/b 是沿带子长度方向铺开的，所以带子的「法线」是 d，不是 perp
 	# （早期这里存成 perp，导致相交判定算的是「沿带子方向」的坐标 -> 带子永远不生效）
 	_blk.append({"a": r["a"], "b": r["b"], "n": d, "t": 0.0, "state": BLK_STATE_ARM})
+	push_event("block_place", ((r["a"] as Vector2) + (r["b"] as Vector2)) * 0.5)
 	queue_redraw()
 	return true
 
@@ -1067,7 +1088,9 @@ func _tick_blocks(dt: float) -> void:
 		blk["t"] += dt
 		if blk["state"] == BLK_STATE_ARM and blk["t"] >= BLK_ARM:
 			blk["state"] = BLK_STATE_ON
+			push_event("block_arm", ((blk["a"] as Vector2) + (blk["b"] as Vector2)) * 0.5)
 		if blk["t"] >= BLK_ARM + BLK_LIFE:
+			push_event("block_die", ((blk["a"] as Vector2) + (blk["b"] as Vector2)) * 0.5)
 			continue
 		keep.append(blk)
 	if keep.size() != _blk.size():

@@ -1,0 +1,16 @@
+{
+  "_说明": "音频事件表：事件名 -> 文件与播放参数。换音效只改这里/换同名文件，代码不动。files 可以写多个（随机挑一个当变体）。",
+  "_规格": "WAV / OGG，单声道优先，44100Hz；音效 0.05~1.0 秒、峰值不超过 -3dBFS；BGM 用 OGg 或 16bit WAV、整段可循环（首尾电平对齐）。",
+  "_约定": "volume_db = 相对总线音量（负数=更轻）；pitch_jitter = 音高随机浮动（0.1 = ±10%，做“不重复感”）；min_gap_ms = 同名事件最短间隔，防连发糊成一片。",
+  "events": {
+    "jet_fire": { "files": ["sfx/jet_fire.wav"], "volume_db": -7, "pitch_jitter": 0.10, "min_gap_ms": 40 },
+    "jet_hit": { "files": ["sfx/jet_hit.wav"], "volume_db": -9, "pitch_jitter": 0.14, "min_gap_ms": 55 },
+    "pickup": { "files": ["sfx/pickup.wav"], "volume_db": -12, "pitch_jitter": 0.18, "min_gap_ms": 35 },
+    "block_place": { "files": ["sfx/block_place.wav"], "volume_db": -6, "pitch_jitter": 0.05, "min_gap_ms": 120 },
+    "block_arm": { "files": ["sfx/block_arm.wav"], "volume_db": -6, "pitch_jitter": 0.04, "min_gap_ms": 120 },
+    "block_die": { "files": ["sfx/block_die.wav"], "volume_db": -8, "pitch_jitter": 0.05, "min_gap_ms": 300 },
+    "fuse_place": { "files": ["sfx/fuse_place.wav"], "volume_db": -6, "pitch_jitter": 0.05, "min_gap_ms": 120 },
+    "fuse_pulse": { "files": ["sfx/fuse_pulse.wav"], "volume_db": -4, "pitch_jitter": 0.04, "min_gap_ms": 200 },
+    "bgm": { "files": ["bgm/bgm_lung.wav"], "volume_db": -16, "loop": true }
+  }
+}

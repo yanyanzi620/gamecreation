@@ -40,6 +40,7 @@ var aura
 var hud
 var auto_seq
 var preview
+var audio
 
 var map_seed := Balance.DEFAULT_SEED
 
@@ -50,6 +51,7 @@ var _acc := 0.0
 var _blk_cd := 0.0
 var _fuse_cd := 0.0
 var _lmb_held := false          # 左键按住 = 连发（节奏由 jet 的冷却决定）
+var _picked_prev := 0           # 上一帧已拾取数，用来给「养分入账」配音
 var _tick_us := 0
 var _aim := MODE_NONE
 
@@ -64,6 +66,9 @@ func _ready() -> void:
 	_build()
 	_build_hud()
 	_reseed(false)
+	if audio != null:
+		audio.start_bgm()
+		print("[AUDIO] " + audio.report())
 
 	if auto_seq != null and auto_seq.wants_run():
 		auto_seq.run()
@@ -121,6 +126,12 @@ func _build() -> void:
 	add_child(cam)
 	cam.make_current()
 
+	# 音频：只管「谁在什么时候响了」，具体放什么见 assets/audio/manifest.json
+	audio = load("res://scripts/audio/audio_director.gd").new()
+	audio.name = "Audio"
+	add_child(audio)
+	audio.setup()
+
 	auto_seq = load("res://scripts/debug/auto_sequence.gd").new()
 	auto_seq.name = "AutoSequence"
 	auto_seq.setup(self)
@@ -176,6 +187,7 @@ func _reseed(roll_map: bool) -> void:
 	pop.reset()
 	aura.nutrient = Balance.START_NUTRIENT
 	aura.picked = 0
+	_picked_prev = 0
 	_acc = 0.0
 	_blk_cd = 0.0
 	_fuse_cd = 0.0
@@ -264,6 +276,9 @@ func _unhandled_input(e: InputEvent) -> void:
 			if view != null:
 				view.set_decor_on(not view.decor_on)
 				print("[DECOR] on=%s" % str(view.decor_on))
+		elif k.keycode == KEY_M:
+			if audio != null:
+				print("[AUDIO] muted=%s" % str(audio.toggle_mute()))
 		elif k.keycode == KEY_R:
 			_aim = MODE_NONE
 			preview.clear()
@@ -352,7 +367,12 @@ func fire_at(target: Vector2) -> int:
 	var d: Vector2 = target - player_unit.position
 	if d.length() < 1.0:
 		d = Vector2.RIGHT
-	return jet.fire(player_unit.position, d)
+	var hit: int = jet.fire(player_unit.position, d)
+	if hit >= 0 and audio != null:
+		audio.play("jet_fire")
+		if hit > 0:
+			audio.play("jet_hit")
+	return hit
 
 
 # target 就是「带子中心要落在哪」：方向 = 单元→target，带子垂直于它
@@ -435,7 +455,19 @@ func _process(delta: float) -> void:
 		aura.tick(STEP, player_unit.position)
 		_tick_us = Time.get_ticks_usec() - t0
 
+	_drain_audio()
 	_update_hud()
+
+
+# 音频出口：玩法层只攒事件名，这里统一翻译成声音
+func _drain_audio() -> void:
+	if audio == null:
+		return
+	if aura.picked != _picked_prev:
+		audio.play("pickup")
+		_picked_prev = aura.picked
+	for ev in pop.drain_events():
+		audio.play(String(ev["k"]))
 
 
 func _update_hud() -> void:
