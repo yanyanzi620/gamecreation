@@ -500,16 +500,20 @@ func _shot_sequence() -> void:
 	if not _map.solid_point(demo):
 		pop.spawn_virus(KIND_BLOB, demo, 78.0, 0.0, 150, 0.0)
 	await get_tree().create_timer(0.60).timeout
-	_place_block(demo)
-	await get_tree().create_timer(1.60).timeout
+	# 第一发：路上没有阻隔带，扇形一直到肉壁为止（验证「被胸膜截断」）
 	_fire(demo)
-	await get_tree().create_timer(0.55).timeout
-	_fire(demo)
-	# 射流残影只有 0.3 秒，必须开完立刻拍，才看得出「被墙截断」
 	await get_tree().create_timer(0.05).timeout
 	_save("res://jet_shot.png")
+	await get_tree().create_timer(0.55).timeout
+	_fire(demo)
 	await get_tree().create_timer(0.85).timeout
 	_save("res://main_shot_a.png")
+	# 第二发：正前方铺一条阻隔带，射流必须停在带子上（验证「带子挡射线」）
+	_place_block(demo)
+	await get_tree().create_timer(0.60).timeout
+	_fire(demo)
+	await get_tree().create_timer(0.05).timeout
+	_save("res://jet_band.png")
 	# 引信丢到正前方那团病毒里（能吸链、能清盘/带）
 	var fuse_spot: Vector2 = player + aim * 270.0
 	if _map.solid_point(fuse_spot):

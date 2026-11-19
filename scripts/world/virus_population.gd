@@ -117,6 +117,8 @@ var _n_live := 0
 # 最近一次射流被墙截断后的外缘点（世界坐标），jet_system 直接拿来画
 var fan_shape := PackedVector2Array()
 var fan_origin := Vector2.ZERO
+# 上一发有多少条射线是被「玩家放的阻隔带」截断的（不是被肉壁）
+var fan_band_clips := 0
 var _n_corpse := 0
 var _kind_live := PackedInt32Array()
 var _v_origin: Array[Vector2] = []
@@ -604,6 +606,7 @@ func _fan_rays(origin: Vector2, dir: Vector2, length: float, half_angle: float) 
 	rays.resize(JET_RAYS)
 	var step := 12.0
 	var shape := PackedVector2Array()
+	fan_band_clips = 0
 	for r in range(JET_RAYS):
 		var ang := -half_angle + 2.0 * half_angle * float(r) / float(JET_RAYS - 1)
 		var d := dir.rotated(ang)
@@ -616,11 +619,45 @@ func _fan_rays(origin: Vector2, dir: Vector2, length: float, half_angle: float) 
 				reach = t
 				break
 			t = minf(t + step, length)
+		# 阻隔带也挡射线：带子是一道墙，射流打在上面就停（闪烁期穿过，与「生效前穿越只减速」一致）
+		var band_t := _band_reach(origin, d, reach)
+		if band_t < reach:
+			reach = band_t
+			fan_band_clips += 1
 		rays[r] = reach
 		shape.append(origin + d * reach)
 	fan_shape = shape
 	fan_origin = origin
 	return rays
+
+
+# 射线在本段距离内最先撞到的「已生效」阻隔带有多远；没有就返回 limit
+func _band_reach(origin: Vector2, d: Vector2, limit: float) -> float:
+	if _blk.is_empty():
+		return limit
+	var best := limit
+	for blk in _blk:
+		if blk["state"] != BLK_STATE_ON:
+			continue
+		var a: Vector2 = blk["a"]
+		var b: Vector2 = blk["b"]
+		var n: Vector2 = blk["n"]
+		var dd := d.dot(n)
+		if absf(dd) < 0.0001:
+			continue  # 射线与带子平行，不会穿
+		var t_hit := -((origin - a).dot(n)) / dd
+		if t_hit < 0.0 or t_hit > best:
+			continue
+		var hitp := origin + d * t_hit
+		var ab := b - a
+		var total := ab.length()
+		if total < 0.0001:
+			continue
+		var along := (hitp - a).dot(ab / total)
+		if along < -BLK_SLACK or along > total + BLK_SLACK:
+			continue
+		best = t_hit
+	return best
 
 
 # 净化场：圆形范围内按数量配额逐帧清除（接触即消融）

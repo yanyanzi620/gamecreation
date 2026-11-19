@@ -48,8 +48,8 @@ func fire(from: Vector2, dir: Vector2) -> int:
 			max_reach = maxf(max_reach, dq)
 			if dq < LENGTH - 1.0:
 				clipped += 1
-		print("[JET] rays=%d clipped=%d max_reach=%.0f/%.0f hit=%d" % [
-			_pop.fan_shape.size(), clipped, max_reach, LENGTH, _last_hit])
+		print("[JET] rays=%d clipped=%d band_clip=%d max_reach=%.0f/%.0f hit=%d" % [
+			_pop.fan_shape.size(), clipped, _pop.fan_band_clips, max_reach, LENGTH, _last_hit])
 	queue_redraw()
 	return _last_hit
 
