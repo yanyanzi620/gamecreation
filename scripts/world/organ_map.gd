@@ -512,6 +512,15 @@ func clip_loop_is_closed(i: int) -> bool:
 	return i >= 0 and i < _clip_closed.size() and bool(_clip_closed[i])
 
 
+# 生成器已经有一圈平滑闭合轮廓时，直接拿来做胸膜渲染线：
+# 省掉一次行进方块重采样，也不会在长折线上出现点状断痕。
+func set_clip_render_loops(arr: Array) -> void:
+	clip_loops = arr
+	_clip_closed = []
+	for lp in arr:
+		_clip_closed.append(true)
+
+
 # 行进方块在鞍点处会让两条子轮廓在一个点上相触，
 # 拼出来的环就会「自相切」——Godot 的三角化不认这种多边形（填不出来）。
 # 这里把自切环在对触点处拆成两个简单环。

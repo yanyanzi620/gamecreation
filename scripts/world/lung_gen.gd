@@ -133,6 +133,8 @@ func _silhouette(m: OrganMap, size: Vector2) -> void:
 		right.append(Vector2(size.x - p.x, p.y))
 	m.add_clip_polygon(left)
 	m.add_clip_polygon(right)
+	# 胸膜渲染线直接用这两圈采样点：形状最准、零重采样成本。
+	m.set_clip_render_loops([left, right])
 	# 中间只有左右两叶之间的体腔，不放任何轮廓
 
 

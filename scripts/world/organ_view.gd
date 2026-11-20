@@ -250,4 +250,4 @@ func _draw() -> void:
 	for pl in _clip_rings:
 		draw_polyline(pl, Color(0.20, 0.075, 0.085, 0.65), 9.0, true)
 	for pl2 in _clip_rings:
-		draw_polyline(pl2, Color(0.88, 0.49, 0.45, 0.88), 2.3, true)
+		draw_polyline(pl2, Color(0.88, 0.49, 0.45, 0.88), 2.3, false)
